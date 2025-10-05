@@ -16,7 +16,7 @@ class裡面的任一函式可以呼叫任一class裡面宣告的變數和函式
 
 ## 目錄 (Table of Contents)
 - [簡介 (introduction)](#簡介-introduction)
-- [安裝](#簡介)
+- [安裝 (installation)](#安裝)
 - [使用方式](#使用方式)
 - [範例](#範例)
 - [目錄結構](#目錄結構)
