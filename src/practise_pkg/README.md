@@ -14,12 +14,12 @@ class裡面的任一函式可以呼叫任一class裡面宣告的變數和函式
 簡短描述你的專案是做什麼的（1～3 行）。
 
 ## 目錄 (Table of Contents)
-- [簡介 (Introduction)](#簡介-Introduction)
-- [安裝 (Installation)](#安裝-Installation)
-- [使用方式](#使用方式)
-- [目錄結構](#目錄結構)
-- [注意事項](#注意事項)
-- [授權](#授權)
+- [簡介 (Introduction)](#簡介-introduction)
+- [安裝 (Installation)](#安裝-installation)
+- [使用方式 (Usage)](#使用方式-usage)
+- [目錄結構 (Directory Structure)](#目錄結構-directory-structure)
+- [注意事項 (Notes)](#注意事項-notes)
+- [授權 (License)](#授權-license)
 
 ## 簡介 (Introduction)
 說明背景、用途或動機。
@@ -38,9 +38,9 @@ git clone https://github.com/yourname/repository.git
 cd repository
 ```
 
-## 使用方式
+## 使用方式 (Usage)
 
-## 目錄結構
+## 目錄結構 (Directory Structure)
 ```bash
 project/
 ├── src/
@@ -52,3 +52,7 @@ project/
 |------|------|
 | A    | 內容 |
 | B    | 內容 |
+
+## 注意事項 (Notes)
+
+## 授權 (License)
