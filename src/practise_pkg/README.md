@@ -15,7 +15,7 @@ class裡面的任一函式可以呼叫任一class裡面宣告的變數和函式
 簡短描述你的專案是做什麼的（1～3 行）。
 
 ## 目錄 (Table of Contents)
-- [簡介 (introduction)](#introduction)
+- [簡介 (introduction)](#簡介introduction)
 - [安裝](#簡介)
 - [使用方式](#使用方式)
 - [範例](#範例)
