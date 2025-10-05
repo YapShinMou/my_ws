@@ -1,0 +1,32 @@
+<!-- 範例 -->
+<mujoco model="simple_box">
+	<compiler angle="degree" coordinate="local"/>
+	
+	<option timestep="0.002" gravity="0 0 -9.81"/>
+	
+	<worldbody>
+		<geom name="floor" type="plane" pos="0 0 0" size="10 10 0.1" rgba="10 10 10 0.3" friction="1 0.005 0.001"/>
+		
+		<body name="cart" pos="0 0 2.2">
+			<joint name="cart_joint" type="slide" axis="1 0 0" range="-5 5" frictionloss="10"/>
+			<geom type="box" density="100" size="0.5 0.2 0.2" rgba="0 0.5 1 1"/>
+			
+			<body name="pole" pos="0 0.31 1">
+				<joint name="pole_joint" type="hinge" pos="0 0 -1" axis="0 1 0" range="-135 135" frictionloss="10"/>
+				<geom type="box" density="100" size="0.1 0.1 1" rgba="1 0.5 0.5 1"/>
+			</body>
+		</body>
+	</worldbody>
+	
+	<actuator>
+		<motor name="cart_motor" joint="cart_joint" ctrlrange="-1000 1000"/>
+	</actuator>
+	
+	<sensor>
+		<jointpos name="cart_pos" joint="cart_joint"/>
+		<jointvel name="cart_vel" joint="cart_joint"/>
+		<jointpos name="pole_pos" joint="pole_joint"/>
+		<jointvel name="pole_vel" joint="pole_joint"/>
+	</sensor>
+</mujoco>
+

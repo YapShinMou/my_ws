@@ -1,0 +1,59 @@
+<!-- 關節範例 -->
+<mujoco model="simple_box">
+	<compiler angle="degree" coordinate="local"/>
+	<option timestep="0.002" gravity="0 0 -9.81"/>
+	
+	<worldbody>
+		<!-- 地板 -->
+		<!-- friction="滑動摩擦 扭轉摩擦 滾動摩擦" -->
+		<geom name="floor" type="plane" pos="0 0 0" size="10 10 0.1" rgba="10 10 10 0.3" friction="1 0.005 0.001"/>
+		
+		<!-- 方塊 (自由掉落) -->
+		<body name="box" pos="0 0 3">
+			<!-- stiffness="彈力" damping=可能會不穩定 -->
+			<joint type="free" stiffness="50" damping="0" frictionloss="10"/>
+			<geom type="box" density="5000" size="0.1 0.1 0.1" rgba="0 0.5 1 1" friction="0.1 0.002 0.0005"/>
+		</body>
+		
+		<!-- (ball joint) -->
+		<body name="ball_joint" pos="0 2 3">
+			<joint type="ball" pos="-1 0 0" stiffness="500" frictionloss="100"/>
+			<geom type="box" size="1 0.1 0.1" rgba="0 0.5 1 1" friction="0.1 0.002 0.0005"/>
+		</body>
+		
+		<!-- (slide joint) -->
+		<body name="slide_joint" pos="0 4 3">
+			<joint type="slide" axis="0 0 1" stiffness="1000" frictionloss="100"/>
+			<geom type="sphere" size="0.3" rgba="0 0.5 1 1" friction="0.1 0.002 0.0005"/>
+		</body>
+		
+		<!-- (hinge joint) -->
+		<body name="hinge_joint" pos="0 6 3">
+			<joint type="hinge" pos="1 0 0" axis="0 1 0" stiffness="500" frictionloss="100"/>
+			<geom type="box" density="5000" size="1 0.1 0.1" rgba="0 0.5 1 1" friction="0.1 0.002 0.0005"/>
+		</body>
+		
+		<!-- (muti joint) -->
+		<body name="base" pos="-4 0 3">
+			<joint type="free"/>
+			<geom type="box" size="0.1 0.1 1" rgba="0 0.5 1 1"/>
+			
+			<body name="T" pos="0 0 -1">
+				<geom type="box" size="0.1 1 0.1" rgba="0 1 0.5 1"/>
+				
+				<body name="L" pos="-0.9 -1.11 0">
+					<joint type="hinge" pos="0.9 0 0" axis="0 1 0" stiffness="500" frictionloss="100"/>
+					<geom type="box" size="1 0.1 0.1" rgba="1 0.5 0.5 1"/>
+					
+					<body name="F" pos="-2 -0.21 0">
+						<joint type="hinge" pos="0.9 0 0" axis="0 1 0" stiffness="500" frictionloss="100"/>
+						<geom type="box" size="1 0.1 0.1" rgba="0.5 0.5 0.5 1"/>
+					</body>	
+				</body>
+			</body>
+		</body>
+	</worldbody>
+	
+	<actuator/>
+</mujoco>
+
