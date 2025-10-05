@@ -13,7 +13,6 @@ class裡面的任一函式可以呼叫任一class裡面宣告的變數和函式
 # 專案名稱 (Project Title) README範例
 
 
-
 ## 目錄 (Table of Contents)
 - [簡介 (Introduction)](#簡介-Introduction)
 - [安裝 (Installation)](#安裝-Installation)
