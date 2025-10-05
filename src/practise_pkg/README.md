@@ -42,11 +42,26 @@ cd repository
 
 ## 目錄結構 (Directory Structure)
 ```bash
-project/
-├── src/
-├── include/
-├── build/
-└── CMakeLists.txt
+my_ws/
+├── CMakeLists.txt
+└── src/
+	├── mujoco_pkg/
+	|	├── CMakeLists.txt
+	|	├── models/
+	|	│	├── cart_pole.xml
+	|	│	├── cube.xml
+	|	|	└── dog.xml
+	|	└── src/
+	|		├── CartPole.cpp
+	|		└── CartPole_without_GUI.cpp
+	└── practise_pkg/
+		├── CMakeLists.txt
+		├── README.md
+		├── include/
+		|	└── user_def_lib.hpp
+		└── src/
+			├── constructor_lib_example.cpp
+			└── user_def_lib.cpp
 ```
 | 名稱 | 說明 |
 |------|------|
