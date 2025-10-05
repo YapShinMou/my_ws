@@ -40,6 +40,7 @@ cd repository
 
 ## 使用方式
 
+## 目錄結構
 ```bash
 project/
 ├── src/
