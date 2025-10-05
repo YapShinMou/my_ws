@@ -1,6 +1,6 @@
-# C++範例程式
+# 範例
 
-Mujoco模擬範例程式、MJCF範例、建構子範例、自訂函式庫、CMakeLists範例
+Mujoco模擬範例程式、MJCF範例、建構子範例、自訂函式庫、CMakeLists範例、README範例
 
 ## Build
 ```bash
