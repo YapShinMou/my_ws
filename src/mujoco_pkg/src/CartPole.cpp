@@ -15,7 +15,8 @@ int main()
 	// 載入模型與資料
 	// -----------------------------------
 	char error[1000];
-	mjModel* m = mj_loadXML("/home/yap/my_ws/src/mujoco_pkg/models/cart_pole.xml", nullptr, error, 1000);
+	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
+	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
 		return 1;
