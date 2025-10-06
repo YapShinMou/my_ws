@@ -4,6 +4,8 @@ project(mujoco_pkg)
 include_directories(/usr/local/include/mujoco)
 link_directories(/usr/local/lib/mujoco)
 
+add_definitions(-DMUJOCO_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
+
 add_executable(CartPole src/CartPole.cpp)
 add_executable(CartPole_without_GUI src/CartPole_without_GUI.cpp)
 
