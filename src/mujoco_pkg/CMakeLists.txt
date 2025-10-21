@@ -20,7 +20,7 @@ add_executable(NN src/NN.cpp)
 add_executable(NN_batch src/NN_batch.cpp)
 add_executable(DQN_test src/DQN_test.cpp)
 
-target_link_libraries(CartPole mujoco glfw GL m dl pthread)
+target_link_libraries(CartPole mujoco glfw pthread)
 target_link_libraries(CartPole_without_GUI mujoco glfw GL m dl pthread)
 target_link_libraries(Dog mujoco glfw GL m dl pthread)
 target_link_libraries(CartPole_DQN mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
@@ -30,3 +30,4 @@ target_link_libraries(test mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(NN mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(NN_batch mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(DQN_test mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
+

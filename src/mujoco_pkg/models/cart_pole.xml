@@ -25,8 +25,10 @@
 	<sensor>
 		<jointpos name="cart_pos" joint="cart_joint"/>
 		<jointvel name="cart_vel" joint="cart_joint"/>
+		<jointactuatorfrc name="cart_tor" joint="cart_joint"/>
 		<jointpos name="pole_pos" joint="pole_joint"/>
 		<jointvel name="pole_vel" joint="pole_joint"/>
+		<jointactuatorfrc name="pole_tor" joint="pole_joint"/>
 	</sensor>
 </mujoco>
 

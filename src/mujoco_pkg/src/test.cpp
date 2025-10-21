@@ -1,71 +1,64 @@
-#include <thread>
-#include <mutex>
-#include <vector>
-#include <deque>
-#include <random>
-#include <chrono>
 #include <iostream>
-#include <torch/torch.h>
-#include <mujoco/mujoco.h>
-#include <GLFW/glfw3.h>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 
-// ==================== Replay Buffer ========================
-class ReplayBuffer {
-public:
-	//自訂資料型態
-	struct Experience {
-		int state;
-		int action;
-		int reward;
-		int next_state;
-	};
-	
-	void push(int s, int a, int r, int s2) {
-		if (buffer_.size() >= 30) buffer_.pop_front();
-		buffer_.push_back({s, a, r, s2});
-	}
-	
-	std::vector<Experience> sample() {
-		std::vector<Experience> batch; //宣告一個名稱叫做 batch 的變數，型態為 std::vector<Experience>
-		std::uniform_int_distribution<int> dist(0, buffer_.size() - 1); //dist(rng) 為0到buffer_.size() - 1隨機整數
-		for (int i=0; i<10; i++) {
-			batch.push_back(buffer_[dist(rng)]);
-		}
-		return batch;
-	}
-	
-	int size() const { return buffer_.size(); }
-	
-private:
-	std::deque<Experience> buffer_; //宣告一個名稱叫做 buffer_ 的變數，型態為 std::deque<Experience>，頭尾兩端插入及刪除十分快速的陣列，元素型態為 Experience
-	std::mt19937 rng{std::random_device{}()}; //建立一個亂數引擎
-};
+// 檢查是否有輸入（非阻塞）
+int kbhit(void) {
+    struct termios oldt, newt;
+    int ch;
+    int oldf;
 
-int main()
-{
-	ReplayBuffer memory;
-	for (int i = 0 ; i < 21 ; ++i) {
-		memory.push(i, i, i, i);
-	}
-	auto batch = memory.sample();
-	for (const auto& exp : batch) {
-    std::cout << "state=" << exp.state
-              << ", action=" << exp.action
-              << ", reward=" << exp.reward
-              << ", next_state=" << exp.next_state
-              << std::endl;
+    tcgetattr(STDIN_FILENO, &oldt);             // 取得目前終端設定
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);           // 關閉行緩衝與回顯
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);  // 設為非阻塞模式
+
+    ch = getchar();
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);    // 恢復終端設定
+    fcntl(STDIN_FILENO, F_SETFL, oldf);
+
+    if(ch != EOF) {
+        ungetc(ch, stdin);                      // 將字元放回輸入緩衝
+        return 1;
+    }
+
+    return 0;
 }
-std::cout << memory.size() << std::endl;
 
-}	
+// 直接取得一個字元，不需按 Enter
+char getch() {
+    char buf = 0;
+    struct termios old = {0};
+    if (tcgetattr(STDIN_FILENO, &old) < 0)
+        perror("tcsetattr()");
+    old.c_lflag &= ~(ICANON | ECHO); // 關閉行緩衝與回顯
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &old) < 0)
+        perror("tcsetattr ICANON");
+    if (read(STDIN_FILENO, &buf, 1) < 0)
+        perror("read()");
+    old.c_lflag |= (ICANON | ECHO);
+    if (tcsetattr(STDIN_FILENO, TCSADRAIN, &old) < 0)
+        perror("tcsetattr ~ICANON");
+    return buf;
+}
 
+int main() {
+    std::cout << "按 q 離開 (不用按 Enter)\n";
 
+    while (true) {
+        if (kbhit()) { // 有鍵盤輸入才執行
+            char c = getch();
+            std::cout << "你按了: " << c << std::endl;
+            if (c == 'q') break;
+        }
+        usleep(10000); // 稍作等待 (10ms)
+    }
 
-
-
-
-
-
-
-
+    std::cout << "結束\n";
+    return 0;
+}
 
