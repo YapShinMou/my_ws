@@ -25,13 +25,18 @@ int main()
 	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
 	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
 	
+	d->ctrl[cart_motor_id] = 500;
+	
 	// -----------------------------------
 	// 主迴圈
 	// -----------------------------------
-	for (int i=0; i<500; ++i)
+	for (int i=0; i<10000; ++i)
 	{
+		if (i > 5000) {
+			d->ctrl[cart_motor_id] = -900;
+		}
+		
 		// 模擬一步
-		d->ctrl[cart_motor_id] = 500;
 		mj_step(m, d);
 		
 		double cart_pos = d->sensordata[m->sensor_adr[cart_pos_id]];

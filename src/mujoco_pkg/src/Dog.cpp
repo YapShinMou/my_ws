@@ -15,7 +15,7 @@ int main()
 	// 載入模型與資料
 	// -----------------------------------
 	char error[1000];
-	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
+	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/dog.xml";
 	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
@@ -61,35 +61,35 @@ int main()
 	// -----------------------------------
 	// 控制與感測器 ID
 	// -----------------------------------
-	int cart_motor_id = mj_name2id(m, mjOBJ_ACTUATOR, "cart_motor");
-	int cart_pos_id = mj_name2id(m, mjOBJ_SENSOR, "cart_pos");
-	int cart_vel_id = mj_name2id(m, mjOBJ_SENSOR, "cart_vel");
-	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
-	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
+	int body_motor_id   = mj_name2id(m, mjOBJ_ACTUATOR, "body_motor");
 	
-	d->ctrl[cart_motor_id] = 500;
-	int i = 0;
+//	int cart_pos_id = mj_name2id(m, mjOBJ_SENSOR, "cart_pos");
+//	int cart_vel_id = mj_name2id(m, mjOBJ_SENSOR, "cart_vel");
+//	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
+//	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
 	
 	// -----------------------------------
 	// 主迴圈
 	// -----------------------------------
 	while( !glfwWindowShouldClose(window) )
 	{
-		if (i > 5000) {
-			d->ctrl[cart_motor_id] = -900;
-		}
+		d->ctrl[body_motor_id] = 0;
+		d->qfrc_applied[1] = 0;
+		d->qfrc_applied[2] = 0;
+		d->qfrc_applied[3] = 0;
+		d->qfrc_applied[4] = 0;
+		d->qfrc_applied[5] = 500;
 		
 		mjtNum simstart = d->time;
 		while (d->time - simstart < 1.0/60.0) {
 			// 模擬一步
 			mj_step(m, d);
-			i = i + 1;
 		}
 		
-		double cart_pos = d->sensordata[m->sensor_adr[cart_pos_id]];
-		double cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
-		double pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
-		double pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
+//		double cart_pos = d->sensordata[m->sensor_adr[cart_pos_id]];
+//		double cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
+//		double pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
+//		double pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
 //		std::cout << "cart_pos=" << cart_pos << " pole_pos=" << pole_pos << std::endl;
 		
 		mjrRect viewport = {0, 0, 0, 0};
