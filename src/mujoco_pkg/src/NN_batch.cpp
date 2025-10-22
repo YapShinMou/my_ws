@@ -4,23 +4,21 @@
 #include <vector>
 #include <random>
 
-int input_dim = 4;
-int hidden1 = 8;
-int hidden2 = 4;
-int output_dim = 2;
+int NN_input_dim = 4;
+int NN_output_dim = 2;
 
-int MEMORY_SIZE = 10;
-int BATCH_SIZE = 5;
-float LR = 5e-2;
+int MEMORY_SIZE = 100;
+int BATCH_SIZE = 32;
+float LR = 1e-3;
 
 // --- 1. Model 定義（簡單 MLP） ---
-struct Net : torch::nn::Module {
+struct NetImpl : torch::nn::Module {
 	torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
 	
-	Net(int64_t input_dim, int64_t hidden1, int64_t hidden2, int64_t output_dim) {
-		fc1 = register_module("fc1", torch::nn::Linear(input_dim, hidden1));
-		fc2 = register_module("fc2", torch::nn::Linear(hidden1, hidden2));
-		fc3 = register_module("fc3", torch::nn::Linear(hidden2, output_dim));
+	NetImpl() {
+		fc1 = register_module("fc1", torch::nn::Linear(NN_input_dim, 128));
+		fc2 = register_module("fc2", torch::nn::Linear(128, 64));
+		fc3 = register_module("fc3", torch::nn::Linear(64, NN_output_dim));
 	}
 	
 	torch::Tensor forward(torch::Tensor x) {
@@ -30,26 +28,29 @@ struct Net : torch::nn::Module {
 		return x;
 	}
 };
+TORCH_MODULE(Net);
 
 // ==================== Replay Buffer ========================
 class ReplayBuffer {
 public:
 	//自訂資料型態
 	struct Experience {
-		std::vector<double> sample;
-		std::vector<double> target;
+		std::vector<float> sample;
+		std::vector<float> target;
 	};
 	
-	void push(const std::vector<double>& sample, const std::vector<double>& target) { // const std::vector<double>& s 唯讀不複製 速度快
+	void push(const std::vector<float>& sample, const std::vector<float>& target) { // const std::vector<double>& s 唯讀不複製 速度快
 		if (buffer_.size() >= MEMORY_SIZE) buffer_.pop_front();
 		buffer_.push_back({sample, target});
 	}
 	
 	std::vector<Experience> sample() {
 		std::vector<Experience> batch; //宣告一個名稱叫做 batch 的變數，型態為 std::vector<Experience>
-		std::uniform_int_distribution<int> dist(0, buffer_.size() - 1); //dist(rng) 為0到buffer_.size() - 1隨機整數
-		for (int i=0; i<BATCH_SIZE; i++) {
-			batch.push_back(buffer_[dist(rng)]); // 有可能重複
+		std::vector<int> indices(buffer_.size());
+		std::iota(indices.begin(), indices.end(), 0);
+		std::shuffle(indices.begin(), indices.end(), rng);
+		for (int i = 0; i < BATCH_SIZE && i < (int)indices.size(); ++i) {
+			batch.push_back(buffer_[indices[i]]);
 		}
 		return batch;
 	}
@@ -69,52 +70,83 @@ void train(Net& neural_network,
 	int batch_size = batch.size();
 	torch::nn::MSELoss loss_;
 	
-	std::vector<double> all_samples;
-	std::vector<double> all_targets;
+	std::vector<float> all_samples;
+	std::vector<float> all_targets;
 	
-	for (const auto& exp : batch) {
-		all_samples.insert(all_samples.end(), exp.sample.begin(), exp.sample.end());
-		all_targets.insert(all_targets.end(), exp.target.begin(), exp.target.end());
+	all_samples.reserve(batch_size * NN_input_dim);
+	all_targets.reserve(batch_size * NN_output_dim);
+	
+	for (const auto& e : batch) {
+		for (int i = 0; i < NN_input_dim; ++i) {
+			all_samples.push_back(static_cast<float>(e.sample[i]));
+		}
+		for (int i = 0; i < NN_output_dim; ++i) {
+			all_targets.push_back(static_cast<float>(e.target[i]));
+		}
 	}
 	
-	torch::Tensor x = torch::tensor(all_samples).reshape({batch_size, input_dim}).to(device);; //向量資料轉成 PyTorch Tensor
-	torch::Tensor t = torch::tensor(all_targets).reshape({batch_size, output_dim}).to(device);
-	
-	// ------ Forward ------
-	torch::Tensor output = neural_network.forward(x);
-	
-	// ------ 計算 Loss ------
-	torch::Tensor loss = loss_(output, t);
+	auto sample_tensor = torch::tensor(all_samples).reshape({batch_size, NN_input_dim}).to(device); //向量資料轉成 PyTorch Tensor
+	auto target_tensor = torch::tensor(all_targets).reshape({batch_size, NN_output_dim}).to(device);
 	
 	// ------ Backpropagate ------
+	auto output = neural_network->forward(sample_tensor); // Forward
+	auto loss = loss_(output, target_tensor); // 計算 Loss
 	optimizer.zero_grad(); // 清空上一輪梯度
 	loss.backward();       // 反向傳播
+	torch::nn::utils::clip_grad_norm_(neural_network->parameters(), 1.0); // 防止梯度爆炸
 	optimizer.step();      // 更新權重
 }
 
 int main() {
+	// -----------------------------------
+	// 初始神經網路
+	// -----------------------------------
 	torch::Device device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU);
 	std::cout << "Using device: " << (device.is_cuda() ? "CUDA (GPU)" : "CPU") << std::endl;
 	
-	Net test_net{input_dim, hidden1, hidden2, output_dim};
-	test_net.to(device);
-	torch::optim::Adam optimizer(test_net.parameters(), torch::optim::AdamOptions(LR));
+	auto test_net = Net();
+	test_net->to(device);
+	// optimizer 要追蹤梯度，optimizer 放在train()裡面會把訓練重置掉
+	torch::optim::Adam optimizer(test_net->parameters(), torch::optim::AdamOptions(LR));
 	
 	ReplayBuffer experience_repository;
 	
-	std::vector<double> sample = {0.5, -1.2, 0.3, 0.8};
-	std::vector<double> target = {8, 4};
-	experience_repository.push(sample, target);
-	
+	std::vector<float> sample = {10, 12, -30, 22};
+	std::vector<float> target = {14, -54};
 	torch::Tensor x = torch::tensor(sample).reshape({1, 4}); //向量資料轉成 PyTorch Tensor
-	torch::Tensor output = test_net.forward(x);
-	std::cout << "Forward output:\n" << output << std::endl;
+	torch::Tensor output = test_net->forward(x);
+	std::cout << "Untrained output:\n" << output << std::endl;
 	
-	auto batch = experience_repository.sample();
-	train(test_net, optimizer, batch, device);
+	for (int i = 0; i < 500; i++) {
+		std::mt19937 rng{std::random_device{}()};
+		std::uniform_int_distribution<int> random_1(-50, 50);
+		std::uniform_int_distribution<int> random_2(-50, 50);
+		std::uniform_int_distribution<int> random_3(-50, 50);
+		std::uniform_int_distribution<int> random_4(-50, 50);
+		
+		float sample_1 = random_1(rng);
+		float sample_2 = random_2(rng);
+		float sample_3 = random_3(rng);
+		float sample_4 = random_4(rng);
+		
+		sample = {sample_1, sample_2, sample_3, sample_4};
+		target = {sample_1+sample_2+sample_3+sample_4, sample_1-sample_2+sample_3-sample_4};
+//		std::cout << sample << " " << target << std::endl;
+		experience_repository.push(sample, target);
+	}
 	
-	output = test_net.forward(x);
-	std::cout << "Forward output:\n" << output << std::endl;
+	for (int i = 0; i < 100; i++) {
+		std::vector<ReplayBuffer::Experience> batch = experience_repository.sample();
+		train(test_net, optimizer, batch, device);
+	}
+	
+	sample = {10, 12, -30, 22};
+	target = {14, -54};
+	x = torch::tensor(sample).reshape({1, 4});
+	auto t = torch::tensor(target).reshape({1, 2});
+	output = test_net->forward(x);
+	std::cout << "Trained output:\n" << output << std::endl;
+	std::cout << "Target:\n" << t << std::endl;
 	
 	return 0;
 }

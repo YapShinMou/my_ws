@@ -1,111 +1,162 @@
-//範例程式
+// 範例
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include <thread>
+#include <chrono>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 
-// 全域變數（參考官方）
-mjvCamera cam;
-mjvOption opt;
-mjvScene scn;
-mjrContext con;
+// MuJoCo data structures
+mjModel* m = nullptr;                  // MuJoCo model
+mjData* d = nullptr;                   // MuJoCo data
+mjvCamera cam;                      // abstract camera
+mjvOption opt;                      // visualization options
+mjvScene scn;                       // abstract scene
+mjrContext con;                     // custom GPU context
+mjvPerturb pert;
 
-int main()
-{
-	// -----------------------------------
-	// 載入模型與資料
-	// -----------------------------------
+char c = 0; //盤輸入
+
+//-------------------------------
+// 非阻塞鍵盤輸入檢查 (類似 kbhit)
+//-------------------------------
+int kbhit(void) {
+	struct termios oldt, newt;
+	int ch;
+	int oldf;
+	
+	tcgetattr(STDIN_FILENO, &oldt);
+	newt = oldt;
+	newt.c_lflag &= ~(ICANON | ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+	oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+	fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+	
+	ch = getchar();
+	
+	tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+	fcntl(STDIN_FILENO, F_SETFL, oldf);
+	
+	if(ch != EOF) {
+		ungetc(ch, stdin);
+		return 1;
+	}
+	
+	return 0;
+}
+
+//-------------------------------
+// myfunc: 背景執行緒 (非阻塞讀鍵盤 + 等待)
+//-------------------------------
+void keyboard_input() {
+	while (true) {
+		if (kbhit()) {
+			c = getchar();
+			if (c == 'q') break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+}
+
+int main() {
+	// ... load model and data
 	char error[1000];
 	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
-	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
+	m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
 		return 1;
 	}
-	mjData* d = mj_makeData(m);
+	d = mj_makeData(m);
 	
-	// -----------------------------------
-	// 初始化 GLFW
-	// -----------------------------------
+	// init GLFW, create window, make OpenGL context current
 	if (!glfwInit()) {
-		std::cerr << "Failed to initialize GLFW" << "Failed to initialize GLFW" << std::endl;
+		std::cerr << "Failed to initialize GLFW" << std::endl;
 		return 1;
 	}
-	
 	GLFWwindow* window = glfwCreateWindow(1200, 700, "MuJoCo GUI", NULL, NULL);
 	if (!window) {
 		std::cerr << "Failed to create GLFW window" << std::endl;
 		return 1;
 	}
 	glfwMakeContextCurrent(window);
-	glfwSwapInterval(1);  // 垂直同步
+	glfwSwapInterval(1);
 	
-	// -----------------------------------
-	// 初始化 MuJoCo 可視化
-	// -----------------------------------
+	// initialize visualization data structures
 	mjv_defaultCamera(&cam);
+	mjv_defaultPerturb(&pert);
 	mjv_defaultOption(&opt);
-	mjv_defaultScene(&scn);
 	mjr_defaultContext(&con);
+	mjv_defaultScene(&scn);
 	
+	// create scene and context
 	mjv_makeScene(m, &scn, 1000);
 	mjr_makeContext(m, &con, mjFONTSCALE_150);
 	
-	cam.type = mjCAMERA_FREE;  // 使用自由相機模式（避免跟模型綁定）
+	cam.type = mjCAMERA_FREE; // camera type (mjtCamera)
 	cam.lookat[0] = 0.0;
-	cam.lookat[1] = 0.0;
-	cam.lookat[2] = 2.0;   // 高度視角，看起來會稍微往下看
-	cam.distance = 15.0;
-	cam.azimuth = 90;   // 左右旋轉角
-	cam.elevation = -10; // 上下旋轉角
+	cam.lookat[1] = 0.0; // lookat point
+	cam.lookat[2] = 2.0;
+	cam.distance = 15.0; // distance to lookat point or tracked body
+	cam.azimuth = 90; // camera azimuth (deg)
+	cam.elevation = -10; // camera elevation (deg)
 	
-	// -----------------------------------
-	// 控制與感測器 ID
-	// -----------------------------------
 	int cart_motor_id = mj_name2id(m, mjOBJ_ACTUATOR, "cart_motor");
-	int cart_pos_id = mj_name2id(m, mjOBJ_SENSOR, "cart_pos");
-	int cart_vel_id = mj_name2id(m, mjOBJ_SENSOR, "cart_vel");
-	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
-	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
+	int cart_tor_id = mj_name2id(m, mjOBJ_SENSOR, "cart_tor");
+	int pole_tor_id = mj_name2id(m, mjOBJ_SENSOR, "pole_tor");
 	
-	// -----------------------------------
-	// 主迴圈
-	// -----------------------------------
-	while( !glfwWindowShouldClose(window) )
-	{
-		d->ctrl[cart_motor_id] = 100;
-		
+	float cart_tor;
+	float pole_tor;
+	
+	// --- 啟動 myfunc 執行緒 ---
+	std::thread thread_1(keyboard_input);
+	
+	// --- 主模擬迴圈 ---
+	while (!glfwWindowShouldClose(window)) {
 		mjtNum simstart = d->time;
 		while (d->time - simstart < 1.0/60.0) {
-			// 模擬一步
+			cart_tor = d->sensordata[m->sensor_adr[cart_tor_id]];
+			if (c == 'a') {
+				d->ctrl[cart_motor_id] = cart_tor - 50;
+				std::cout << "  cart_tor: " << cart_tor - 50<< std::endl;
+			} else if (c == 'd') {
+				d->ctrl[cart_motor_id] = cart_tor + 50;
+				std::cout << "  cart_tor: " << cart_tor + 50<< std::endl;
+			}
+			c = 's';
+			
 			mj_step(m, d);
 		}
 		
-		double cart_pos = d->sensordata[m->sensor_adr[cart_pos_id]];
-		double cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
-		double pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
-		double pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
-//		std::cout << "cart_pos=" << cart_pos << " pole_pos=" << pole_pos << std::endl;
-		
+		// get framebuffer viewport
 		mjrRect viewport = {0, 0, 0, 0};
 		glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
 		
-		// 更新畫面
-		mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+		// update scene and render
+		mjv_updateScene(m, d, &opt, nullptr, &cam, mjCAT_ALL, &scn);
 		mjr_render(viewport, &scn, &con);
 		
+		// swap OpenGL buffers (blocking call due to v-sync)
 		glfwSwapBuffers(window);
+		
+		// process pending GUI events, call GLFW callbacks
 		glfwPollEvents();
 	}
 	
-	// -----------------------------------
-	// 清理
-	// -----------------------------------
+	thread_1.join();
+	
 	mj_deleteData(d);
 	mj_deleteModel(m);
 	
+	// close GLFW, free visualization storage
 	glfwTerminate();
 	mjv_freeScene(&scn);
 	mjr_freeContext(&con);
+	
 	return 0;
 }
+
+
 
