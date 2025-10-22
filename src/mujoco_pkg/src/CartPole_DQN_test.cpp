@@ -1,4 +1,4 @@
-#include <thread>
+// 範例程式
 #include <mutex>
 #include <vector>
 #include <deque>
@@ -8,6 +8,23 @@
 #include <torch/torch.h>
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
+
+#include <thread>
+#include <chrono>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+// MuJoCo data structures
+mjModel* m = nullptr;                  // MuJoCo model
+mjData* d = nullptr;                   // MuJoCo data
+mjvCamera cam;                      // abstract camera
+mjvOption opt;                      // visualization options
+mjvScene scn;                       // abstract scene
+mjrContext con;                     // custom GPU context
+mjvPerturb pert;
+
+char c = 0; //盤輸入
 
 // ==================== 超參數 ====================
 const int input_dim = 4;
@@ -22,12 +39,6 @@ const int output_dim = 7;
 //constexpr float EPS_END = 0.01f;
 //constexpr float EPS_DECAY = 100000.0f;
 //constexpr int TARGET_UPDATE = 10;
-
-// 全域變數（參考官方）
-mjvCamera cam;
-mjvOption opt;
-mjvScene scn;
-mjrContext con;
 
 // ==================== DQN Implement ====================
 struct NetImpl : torch::nn::Module {
@@ -48,7 +59,7 @@ struct NetImpl : torch::nn::Module {
 };
 TORCH_MODULE(Net);
 
-int select_action(Net& policy_net, const std::vector<double>& state, float epsilon, const torch::Device& device) {
+int select_action(Net& policy_net, const std::vector<float>& state, float epsilon, const torch::Device& device) {
 //	std::uniform_real_distribution<float> maxQ_or_random(0.0f,1.0f);
 //	std::mt19937 rng{std::random_device{}()};
 //	if (maxQ_or_random(rng) < epsilon) {
@@ -62,69 +73,106 @@ int select_action(Net& policy_net, const std::vector<double>& state, float epsil
 //	}
 }
 
+//-------------------------------
+// 非阻塞鍵盤輸入檢查 (類似 kbhit)
+//-------------------------------
+int kbhit(void) {
+	struct termios oldt, newt;
+	int ch;
+	int oldf;
+	
+	tcgetattr(STDIN_FILENO, &oldt);
+	newt = oldt;
+	newt.c_lflag &= ~(ICANON | ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+	oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+	fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+	
+	ch = getchar();
+	
+	tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+	fcntl(STDIN_FILENO, F_SETFL, oldf);
+	
+	if(ch != EOF) {
+		ungetc(ch, stdin);
+		return 1;
+	}
+	
+	return 0;
+}
+
+//-------------------------------
+// myfunc: 背景執行緒 (非阻塞讀鍵盤 + 等待)
+//-------------------------------
+void keyboard_input() {
+	while (true) {
+		if (kbhit()) {
+			c = getchar();
+			if (c == 'q') break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+}
+
 // ---------- main ----------
 int main()
 {
-	// -----------------------------------
-	// 載入模型與資料
-	// -----------------------------------
+	// ... load model and data
 	char error[1000];
 	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
-	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
+	m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
 		return 1;
 	}
-	mjData* d = mj_makeData(m);
+	d = mj_makeData(m);
 	
-	// -----------------------------------
-	// 初始化 GLFW
-	// -----------------------------------
+	// init GLFW, create window, make OpenGL context current
 	if (!glfwInit()) {
 		std::cerr << "Failed to initialize GLFW" << "Failed to initialize GLFW" << std::endl;
 		return 1;
 	}
-	
 	GLFWwindow* window = glfwCreateWindow(1200, 700, "MuJoCo GUI", NULL, NULL);
 	if (!window) {
 		std::cerr << "Failed to create GLFW window" << std::endl;
 		return 1;
 	}
 	glfwMakeContextCurrent(window);
-	glfwSwapInterval(1);  // 垂直同步
+	glfwSwapInterval(1);
 	
-	// -----------------------------------
-	// 初始化 MuJoCo 可視化
-	// -----------------------------------
+	// initialize visualization data structures
 	mjv_defaultCamera(&cam);
 	mjv_defaultOption(&opt);
 	mjv_defaultScene(&scn);
 	mjr_defaultContext(&con);
 	
+	// create scene and context
 	mjv_makeScene(m, &scn, 1000);
 	mjr_makeContext(m, &con, mjFONTSCALE_150);
 	
-	cam.type = mjCAMERA_FREE;  // 使用自由相機模式（避免跟模型綁定）
+	cam.type = mjCAMERA_FREE; // camera type (mjtCamera)
 	cam.lookat[0] = 0.0;
-	cam.lookat[1] = 0.0;
-	cam.lookat[2] = 2.0;   // 高度視角，看起來會稍微往下看
-	cam.distance = 15.0;
-	cam.azimuth = 90;   // 左右旋轉角
-	cam.elevation = -10; // 上下旋轉角
+	cam.lookat[1] = 0.0; // lookat point
+	cam.lookat[2] = 2.0;
+	cam.distance = 15.0; // distance to lookat point or tracked body
+	cam.azimuth = 90; // camera azimuth (deg)
+	cam.elevation = -10; // camera elevation (deg)
 	
-	// -----------------------------------
-	// 控制與感測器 ID
-	// -----------------------------------
 	int cart_motor_id = mj_name2id(m, mjOBJ_ACTUATOR, "cart_motor");
 	int cart_pos_id = mj_name2id(m, mjOBJ_SENSOR, "cart_pos");
 	int cart_vel_id = mj_name2id(m, mjOBJ_SENSOR, "cart_vel");
+	int cart_tor_id = mj_name2id(m, mjOBJ_SENSOR, "cart_tor");
 	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
 	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
 	
-	double cart_pos;
-	double cart_vel;
-	double pole_pos;
-	double pole_vel;
+	float cart_pos;
+	float cart_vel;
+	float cart_tor;
+	float pole_pos;
+	float pole_vel;
+	
+	// --- 啟動 myfunc 執行緒 ---
+	std::thread thread_1(keyboard_input);
 	
 	// -----------------------------------
 	// 初始神經網路
@@ -163,15 +211,13 @@ int main()
 		cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
 		pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
 		pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
-		std::vector<double> state = {cart_pos, cart_vel, pole_pos, pole_vel};
+		std::vector<float> state = {cart_pos, cart_vel, pole_pos, pole_vel};
 		d->ctrl[cart_motor_id] = 0;
 		
 		// episode loop
 		while (!done) {
 			mjtNum simstart = d->time;
 			while (d->time - simstart < 1.0/60) {
-//				std::cout << "time: " << d->time << std::endl;
-				
 				// compute epsilon
 //				epsilon = EPS_END + (EPS_START - EPS_END) * std::exp(-1.0f * float(steps_done) / EPS_DECAY);
 //				steps_done = steps_done + 1;
@@ -179,20 +225,28 @@ int main()
 				// choose action
 				int action = select_action(policy_net, state, 0, device);
 				if (action == 0) {
-					d->ctrl[cart_motor_id] = -900;
+					cart_tor = -900;
 				} else if (action == 1) {
-					d->ctrl[cart_motor_id] = -600;
+					cart_tor = -600;
 				} else if (action == 2) {
-					d->ctrl[cart_motor_id] = -300;
+					cart_tor = -300;
 				} else if (action == 3) {
-					d->ctrl[cart_motor_id] = 0;
+					cart_tor = 0;
 				} else if (action == 4) {
-					d->ctrl[cart_motor_id] = 300;
+					cart_tor = 300;
 				} else if (action == 5) {
-					d->ctrl[cart_motor_id] = 600;
+					cart_tor = 600;
 				} else { 
-					d->ctrl[cart_motor_id] = 900;
+					cart_tor = 900;
 				}
+				
+				if (c == 'a') {
+					cart_tor = cart_tor - 30;
+				} else if (c == 'd') {
+					cart_tor = cart_tor + 30;
+				}
+				
+				d->ctrl[cart_motor_id] = cart_tor;
 				
 				// 模擬一步
 				mj_step(m, d);
@@ -200,7 +254,7 @@ int main()
 				cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
 				pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
 				pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
-//				std::vector<double> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
+//				std::vector<float> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
 				
 //				float reward = get_reward(state, next_state, done);
 //				total_reward += reward;
@@ -247,9 +301,8 @@ int main()
 //		std::cout << "Failed to save model" << e.what() << std::endl;
 //	}
 	
-	// -----------------------------------
-	// 清理
-	// -----------------------------------
+	thread_1.join();
+	
 	mj_deleteData(d);
 	mj_deleteModel(m);
 	
@@ -258,10 +311,10 @@ int main()
 	mjr_freeContext(&con);
 	return 0;
 }
-	
-	
-	
-	
-	
+
+
+
+
+
 
 

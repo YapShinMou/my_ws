@@ -1,3 +1,4 @@
+// 範例
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
@@ -7,12 +8,16 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-mjvCamera cam;
-mjvOption opt;
-mjvScene scn;
-mjrContext con;
+// MuJoCo data structures
+mjModel* m = nullptr;                  // MuJoCo model
+mjData* d = nullptr;                   // MuJoCo data
+mjvCamera cam;                      // abstract camera
+mjvOption opt;                      // visualization options
+mjvScene scn;                       // abstract scene
+mjrContext con;                     // custom GPU context
+mjvPerturb pert;
 
-char c = 0;
+char c = 0; //盤輸入
 
 //-------------------------------
 // 非阻塞鍵盤輸入檢查 (類似 kbhit)
@@ -45,51 +50,58 @@ int kbhit(void) {
 //-------------------------------
 // myfunc: 背景執行緒 (非阻塞讀鍵盤 + 等待)
 //-------------------------------
-void myfunc() {
+void keyboard_input() {
 	while (true) {
 		if (kbhit()) {
 			c = getchar();
-//			std::cout << "你按了: " << c << std::endl;
 			if (c == 'q') break;
 		}
-		// 加入等待，避免 CPU 100%
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 }
 
 int main() {
-	// --- 載入模型 ---
+	// ... load model and data
 	char error[1000];
 	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
-	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
+	m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
 		return 1;
 	}
-	mjData* d = mj_makeData(m);
+	d = mj_makeData(m);
 	
-	// --- 初始化 GLFW ---
+	// init GLFW, create window, make OpenGL context current
 	if (!glfwInit()) {
 		std::cerr << "Failed to initialize GLFW" << std::endl;
 		return 1;
 	}
 	GLFWwindow* window = glfwCreateWindow(1200, 700, "MuJoCo GUI", NULL, NULL);
+	if (!window) {
+		std::cerr << "Failed to create GLFW window" << std::endl;
+		return 1;
+	}
 	glfwMakeContextCurrent(window);
 	glfwSwapInterval(1);
 	
-	// --- 初始化 MuJoCo ---
+	// initialize visualization data structures
 	mjv_defaultCamera(&cam);
+	mjv_defaultPerturb(&pert);
 	mjv_defaultOption(&opt);
-	mjv_defaultScene(&scn);
 	mjr_defaultContext(&con);
+	mjv_defaultScene(&scn);
+	
+	// create scene and context
 	mjv_makeScene(m, &scn, 1000);
 	mjr_makeContext(m, &con, mjFONTSCALE_150);
 	
-	cam.type = mjCAMERA_FREE;
+	cam.type = mjCAMERA_FREE; // camera type (mjtCamera)
+	cam.lookat[0] = 0.0;
+	cam.lookat[1] = 0.0; // lookat point
 	cam.lookat[2] = 2.0;
-	cam.distance = 15.0;
-	cam.azimuth = 90;
-	cam.elevation = -10;
+	cam.distance = 15.0; // distance to lookat point or tracked body
+	cam.azimuth = 90; // camera azimuth (deg)
+	cam.elevation = -10; // camera elevation (deg)
 	
 	int cart_motor_id = mj_name2id(m, mjOBJ_ACTUATOR, "cart_motor");
 	int cart_tor_id = mj_name2id(m, mjOBJ_SENSOR, "cart_tor");
@@ -99,15 +111,13 @@ int main() {
 	float pole_tor;
 	
 	// --- 啟動 myfunc 執行緒 ---
-	std::thread t1(myfunc);
+	std::thread thread_1(keyboard_input);
 	
 	// --- 主模擬迴圈 ---
 	while (!glfwWindowShouldClose(window)) {
-		cart_tor = d->sensordata[m->sensor_adr[cart_tor_id]];
-		
-		
 		mjtNum simstart = d->time;
 		while (d->time - simstart < 1.0/60.0) {
+			cart_tor = d->sensordata[m->sensor_adr[cart_tor_id]];
 			if (c == 'a') {
 				d->ctrl[cart_motor_id] = cart_tor - 50;
 				std::cout << "  cart_tor: " << cart_tor - 50<< std::endl;
@@ -120,21 +130,31 @@ int main() {
 			mj_step(m, d);
 		}
 		
+		// get framebuffer viewport
 		mjrRect viewport = {0, 0, 0, 0};
 		glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
-		mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+		
+		// update scene and render
+		mjv_updateScene(m, d, &opt, nullptr, &cam, mjCAT_ALL, &scn);
 		mjr_render(viewport, &scn, &con);
+		
+		// swap OpenGL buffers (blocking call due to v-sync)
 		glfwSwapBuffers(window);
+		
+		// process pending GUI events, call GLFW callbacks
 		glfwPollEvents();
 	}
 	
-	t1.join();
+	thread_1.join();
 	
 	mj_deleteData(d);
 	mj_deleteModel(m);
+	
+	// close GLFW, free visualization storage
+	glfwTerminate();
 	mjv_freeScene(&scn);
 	mjr_freeContext(&con);
-	glfwTerminate();
+	
 	return 0;
 }
 

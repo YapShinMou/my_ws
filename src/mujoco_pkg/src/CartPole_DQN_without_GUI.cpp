@@ -1,5 +1,6 @@
+// 範例程式
 //#include <string>
-#include <thread>
+//#include <thread>
 #include <mutex>
 #include <vector>
 #include <deque>
@@ -9,6 +10,15 @@
 #include <torch/torch.h>
 #include <mujoco/mujoco.h>
 //#include <GLFW/glfw3.h>
+
+// MuJoCo data structures
+mjModel* m = nullptr;                  // MuJoCo model
+mjData* d = nullptr;                   // MuJoCo data
+//mjvCamera cam;                      // abstract camera
+//mjvOption opt;                      // visualization options
+//mjvScene scn;                       // abstract scene
+//mjrContext con;                     // custom GPU context
+//mjvPerturb pert;
 
 // ==================== 超參數 ====================
 const int input_dim = 4;
@@ -23,12 +33,6 @@ constexpr float EPS_START = 1.0f;
 constexpr float EPS_END = 0.01f;
 constexpr float EPS_DECAY = 200000.0f;
 constexpr int TARGET_UPDATE = 10;
-
-// 全域變數（參考官方）
-//mjvCamera cam;
-//mjvOption opt;
-//mjvScene scn;
-//mjrContext con;
 
 // ==================== DQN Implement ====================
 struct NetImpl : torch::nn::Module {
@@ -54,14 +58,14 @@ class ReplayBuffer {
 public:
 	//自訂資料型態
 	struct Experience {
-		std::vector<double> state;
+		std::vector<float> state;
 		int action;
 		float reward;
-		std::vector<double> next_state;
+		std::vector<float> next_state;
 		bool done;
 	};
 	
-	void push(const std::vector<double>& state, int action, float reward, const std::vector<double>& next_state, bool done) {
+	void push(const std::vector<float>& state, int action, float reward, const std::vector<float>& next_state, bool done) {
 		if (buffer_.size() >= MEMORY_SIZE) buffer_.pop_front();
 		buffer_.push_back({state, action, reward, next_state, done});
 	}
@@ -93,7 +97,7 @@ private:
 	std::mt19937 rng{std::random_device{}()}; //建立一個亂數引擎
 };
 
-float get_reward(const std::vector<double>& state, const std::vector<double>& next_state, bool done) {
+float get_reward(const std::vector<float>& state, const std::vector<float>& next_state, bool done) {
 	if (next_state[2] > -0.5 && next_state[2] < 0.5) {
 		return 1 - 2*abs(next_state[2]);
 	} else {
@@ -101,7 +105,7 @@ float get_reward(const std::vector<double>& state, const std::vector<double>& ne
 	}
 }
 
-int select_action(Net& policy_net, const std::vector<double>& state, float epsilon, const torch::Device& device) {
+int select_action(Net& policy_net, const std::vector<float>& state, float epsilon, const torch::Device& device) {
 	std::uniform_real_distribution<float> maxQ_or_random(0.0f,1.0f);
 	std::mt19937 rng{std::random_device{}()};
 	if (maxQ_or_random(rng) < epsilon) {
@@ -124,7 +128,7 @@ void train(Net& policy_net,
 	int batch_size = batch.size();
 	torch::nn::MSELoss loss_;
 	
-	std::vector<double> all_state, all_next_state;
+	std::vector<float> all_state, all_next_state;
 	std::vector<int> all_action;
 	std::vector<float> all_reward;
 	std::vector<float> all_done;
@@ -171,66 +175,58 @@ void train(Net& policy_net,
 // ---------- main ----------
 int main()
 {
-	// -----------------------------------
-	// 載入模型與資料
-	// -----------------------------------
+	// ... load model and data
 	char error[1000];
 	std::string xml_file = std::string(MUJOCO_MODEL_DIR) + "/cart_pole.xml";
-	mjModel* m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
+	m = mj_loadXML(xml_file.c_str(), nullptr, error, 1000);
 	if (!m) {
 		std::cerr << "Failed to load XML: " << error << std::endl;
 		return 1;
 	}
-	mjData* d = mj_makeData(m);
+	d = mj_makeData(m);
 	
-	// -----------------------------------
-	// 初始化 GLFW
-	// -----------------------------------
+	// init GLFW, create window, make OpenGL context current
 //	if (!glfwInit()) {
 //		std::cerr << "Failed to initialize GLFW" << "Failed to initialize GLFW" << std::endl;
 //		return 1;
 //	}
-	
 //	GLFWwindow* window = glfwCreateWindow(1200, 700, "MuJoCo GUI", NULL, NULL);
 //	if (!window) {
 //		std::cerr << "Failed to create GLFW window" << std::endl;
 //		return 1;
 //	}
 //	glfwMakeContextCurrent(window);
-//	glfwSwapInterval(1);  // 垂直同步
+//	glfwSwapInterval(1);
 	
-	// -----------------------------------
-	// 初始化 MuJoCo 可視化
-	// -----------------------------------
+	// initialize visualization data structures
 //	mjv_defaultCamera(&cam);
+//	mjv_defaultPerturb(&pert);
 //	mjv_defaultOption(&opt);
-//	mjv_defaultScene(&scn);
 //	mjr_defaultContext(&con);
+//	mjv_defaultScene(&scn);
 	
+	// create scene and context
 //	mjv_makeScene(m, &scn, 1000);
 //	mjr_makeContext(m, &con, mjFONTSCALE_150);
 	
-//	cam.type = mjCAMERA_FREE;  // 使用自由相機模式（避免跟模型綁定）
+//	cam.type = mjCAMERA_FREE; // camera type (mjtCamera)
 //	cam.lookat[0] = 0.0;
-//	cam.lookat[1] = 0.0;
-//	cam.lookat[2] = 2.0;   // 高度視角，看起來會稍微往下看
-//	cam.distance = 15.0;
-//	cam.azimuth = 90;   // 左右旋轉角
-//	cam.elevation = -10; // 上下旋轉角
+//	cam.lookat[1] = 0.0; // lookat point
+//	cam.lookat[2] = 2.0;
+//	cam.distance = 15.0; // distance to lookat point or tracked body
+//	cam.azimuth = 90; // camera azimuth (deg)
+//	cam.elevation = -10; // camera elevation (deg)
 	
-	// -----------------------------------
-	// 控制與感測器 ID
-	// -----------------------------------
 	int cart_motor_id = mj_name2id(m, mjOBJ_ACTUATOR, "cart_motor");
 	int cart_pos_id = mj_name2id(m, mjOBJ_SENSOR, "cart_pos");
 	int cart_vel_id = mj_name2id(m, mjOBJ_SENSOR, "cart_vel");
 	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
 	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
 	
-	double cart_pos;
-	double cart_vel;
-	double pole_pos;
-	double pole_vel;
+	float cart_pos;
+	float cart_vel;
+	float pole_pos;
+	float pole_vel;
 	
 	// -----------------------------------
 	// 初始神經網路
@@ -268,7 +264,7 @@ int main()
 		cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
 		pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
 		pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
-		std::vector<double> state = {cart_pos, cart_vel, pole_pos, pole_vel};
+		std::vector<float> state = {cart_pos, cart_vel, pole_pos, pole_vel};
 		d->ctrl[cart_motor_id] = 0;
 		
 		// episode loop
@@ -305,7 +301,7 @@ int main()
 				cart_vel = d->sensordata[m->sensor_adr[cart_vel_id]];
 				pole_pos = d->sensordata[m->sensor_adr[pole_pos_id]];
 				pole_vel = d->sensordata[m->sensor_adr[pole_vel_id]];
-				std::vector<double> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
+				std::vector<float> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
 				
 				float reward = get_reward(state, next_state, done);
 				total_reward += reward;
@@ -327,11 +323,18 @@ int main()
 			
 //			}
 			
+			// get framebuffer viewport
 //			mjrRect viewport = {0, 0, 0, 0};
 //			glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
+			
+			// update scene and render
 //			mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
 //			mjr_render(viewport, &scn, &con);
+			
+			// swap OpenGL buffers (blocking call due to v-sync)
 //			glfwSwapBuffers(window);
+			
+			// process pending GUI events, call GLFW callbacks
 //			glfwPollEvents();
 		} // end episode loop
 		
@@ -359,6 +362,7 @@ int main()
 	mj_deleteData(d);
 	mj_deleteModel(m);
 	
+// close GLFW, free visualization storage
 //	glfwTerminate();
 //	mjv_freeScene(&scn);
 //	mjr_freeContext(&con);
