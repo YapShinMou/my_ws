@@ -7,7 +7,7 @@
 #include <torch/torch.h>
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
-#include <cmath> //???????????
+#include <cmath>
 
 // MuJoCo data structures
 mjModel* m = nullptr;                  // MuJoCo model
@@ -21,10 +21,10 @@ mjvPerturb pert;
 // ---------------- 超參數 ----------------
 constexpr int STATE_DIM = 4;
 constexpr int ACTION_DIM = 1;
-constexpr int MEMORY_SIZE = 1000;
+constexpr int MEMORY_SIZE = 2000;
 constexpr int BATCH_SIZE = 128;
 constexpr int EPISODES = 1000;
-constexpr int TARGET_UPDATE_INTERVAL = 10;
+constexpr int TARGET_UPDATE = 1;
 
 float GAMMA = 0.99;
 float TAU = 0.005;
@@ -32,6 +32,7 @@ float ALPHA = 0.2;
 float lr_v = 3e-4;
 float lr_q = 3e-4;
 float lr_pi = 3e-4;
+float lr_alpha = 3e-4;
 
 // ---------------- 定義 MLP ----------------
 struct MLPImpl : torch::nn::Module {
@@ -88,42 +89,28 @@ class SACAgent {
 public:
 	SACAgent() :
 		device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
-		v_net(STATE_DIM, 256, 1),
-		v_target(STATE_DIM, 256, 1),
 		q1_net(STATE_DIM + ACTION_DIM, 256, 1),
 		q2_net(STATE_DIM + ACTION_DIM, 256, 1),
+		q1_target(STATE_DIM + ACTION_DIM, 256, 1),
+		q2_target(STATE_DIM + ACTION_DIM, 256, 1),
 		policy_net(STATE_DIM, 256, 2 * ACTION_DIM),
-		opt_v(v_net->parameters(), torch::optim::AdamOptions(lr_v)),
+		log_alpha(torch::zeros({1}, torch::TensorOptions().requires_grad(true).device(device))),
 		opt_q1(q1_net->parameters(), torch::optim::AdamOptions(lr_q)),
 		opt_q2(q2_net->parameters(), torch::optim::AdamOptions(lr_q)),
-		opt_pi(policy_net->parameters(), torch::optim::AdamOptions(lr_pi))
+		opt_pi(policy_net->parameters(), torch::optim::AdamOptions(lr_pi)),
+		opt_log_alpha(std::vector<torch::Tensor>{log_alpha}, torch::optim::AdamOptions(lr_alpha))
 	{
-		v_net->to(device);
-		v_target->to(device);
 		q1_net->to(device);
 		q2_net->to(device);
+		q1_target->to(device);
+		q2_target->to(device);
 		policy_net->to(device);
-		
-//		torch::load(policy_net, "policy_net.pt"); //
-		
-		torch::NoGradGuard no_grad;
-		auto src_params = v_net->named_parameters();
-		auto tgt_params = v_target->named_parameters();
-		for (auto &pair : src_params) {
-			auto name = pair.key();
-			auto &src_tensor = pair.value();
-			auto &tgt_tensor = tgt_params[name];
-			tgt_tensor.copy_(src_tensor);
-		}
-		for (auto &p : v_target->parameters()) {
-			p.set_requires_grad(false);
-		}
 	}
 	
-	std::vector<float> select_action(const std::vector<float>& state){
+	std::vector<float> select_action(const std::vector<float>& state) {
 		auto state_tensor = torch::tensor(state).reshape({1, STATE_DIM}).to(device);
 		torch::NoGradGuard no_grad;
-		auto action_tensor = sample_action(state_tensor);
+		auto [action_tensor, next_log_pi] = sample_action(state_tensor);
 		auto action_cpu = action_tensor.to(torch::kCPU).squeeze();
 		std::vector<float> action(action_cpu.data_ptr<float>(),
                                   action_cpu.data_ptr<float>() + action_cpu.numel());
@@ -159,12 +146,15 @@ public:
 		auto next_state_tensor = torch::tensor(all_next_state).reshape({BATCH_SIZE, STATE_DIM}).to(device);
 		auto not_t_tensor = torch::tensor(all_not_t).reshape({BATCH_SIZE, 1}).to(device);
 		
+		auto alpha = log_alpha.exp();
+		
 		// --- Q target ---
-		auto next_action = sample_action(next_state_tensor);
-		auto next_q1 = q1_net->forward(torch::cat({next_state_tensor, next_action}, 1));
-		auto next_q2 = q2_net->forward(torch::cat({next_state_tensor, next_action}, 1));
+		auto [next_action, next_log_pi] = sample_action(next_state_tensor);
+		auto next_q1 = q1_target->forward(torch::cat({next_state_tensor, next_action}, 1));
+		auto next_q2 = q2_target->forward(torch::cat({next_state_tensor, next_action}, 1));
 		auto q_target_min = torch::min(next_q1, next_q2);
-		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - ALPHA * ln_pi.detach());
+		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - ALPHA * next_log_pi);
+		q_target = q_target.detach();
 		
 		// --- Q updates ---
 		auto q_input = torch::cat({state_tensor, action_tensor}, 1);
@@ -177,94 +167,83 @@ public:
 		opt_q1.zero_grad(); loss_q1.backward(); opt_q1.step();
 		opt_q2.zero_grad(); loss_q2.backward(); opt_q2.step();
 		
-		// --- Value update ---
-		auto a_pi = sample_action(state_tensor);
-		auto q_input_pi = torch::cat({state_tensor, a_pi}, 1);
-		auto q_min = torch::min(q1_net->forward(q_input_pi), q2_net->forward(q_input_pi));
-		auto v_target_now = (q_min.detach() - ALPHA * ln_pi.detach());
-		auto loss_v = torch::mse_loss(v_net->forward(state_tensor), v_target_now);
-		
-		opt_v.zero_grad();
-		loss_v.backward();
-		opt_v.step();
-		
 		// --- Policy update ---
+		auto [a_pi, log_pi] = sample_action(state_tensor);
+		auto q_input_pi = torch::cat({state_tensor, a_pi}, 1);
 		auto q_min_pi = torch::min(q1_net->forward(q_input_pi), q2_net->forward(q_input_pi));
-		auto loss_pi = (ALPHA * ln_pi - q_min_pi).mean();
+		auto loss_pi = (ALPHA * log_pi - q_min_pi).mean();
 		
 		opt_pi.zero_grad();
 		loss_pi.backward();
 		opt_pi.step();
 		
-		// --- Soft update target ---
-		torch::NoGradGuard no_grad;
-		auto src_params = v_net->named_parameters();
-		auto tgt_params = v_target->named_parameters();
-		for (auto &pair : tgt_params) {
-			const auto &name = pair.key();
-			auto &tgt = pair.value();
-			auto &src = src_params[name];
-			tgt.copy_(tgt * (1.0 - TAU) + src * TAU);
-		}
+		// --- alpha ---
+		auto alpha_loss = -(log_alpha * (log_pi.detach() - ACTION_DIM)).mean();
+		
+		opt_log_alpha.zero_grad();
+		alpha_loss.backward();
+		opt_log_alpha.step();
 	}
 	
 	void save_net() {
 		torch::save(policy_net, "policy_net.pt");
 	}
 	
+	void update_target_net() {
+		torch::NoGradGuard no_grad;
+		for (auto &pair : q1_target->named_parameters()) {
+			auto name = pair.key();                            // 取參數名稱（例如 "layer1.weight"）
+			auto &tgt = pair.value();                          // 取得 target net 的參數 Tensor
+			auto &src = q1_net->named_parameters()[name];      // 對應到 q1_net 的同名參數 Tensor
+			tgt.copy_(tgt * (1.0 - TAU) + src * TAU);          // 按公式更新 target 參數
+		}
+		
+		for (auto &pair : q2_target->named_parameters()) {
+			auto name = pair.key();
+			auto &tgt = pair.value();
+			auto &src = q2_net->named_parameters()[name];
+			tgt.copy_(tgt * (1.0 - TAU) + src * TAU);
+		}
+	}
+	
 private:
 	torch::Device device;
 	
-	MLP v_net{nullptr};
-	MLP v_target{nullptr};
 	MLP q1_net{nullptr};
 	MLP q2_net{nullptr};
+	MLP q1_target{nullptr};
+	MLP q2_target{nullptr};
 	MLP policy_net{nullptr};
 	
-	torch::optim::Adam opt_v;
+	torch::Tensor log_alpha;
+	
 	torch::optim::Adam opt_q1;
 	torch::optim::Adam opt_q2;
 	torch::optim::Adam opt_pi;
+	torch::optim::Adam opt_log_alpha;
 	
-	torch::Tensor ln_pi;
-	
-//	torch::Tensor sample_action(torch::Tensor state, torch::Tensor &logp) {
-//		auto mean_logstd = policy_net->forward(state);
-//		auto mean = mean_logstd.slice(1, 0, ACTION_DIM);
-//		auto log_std = mean_logstd.slice(1, ACTION_DIM, 2 * ACTION_DIM).clamp(-20, 2);
-//		auto std = log_std.exp();
-//		auto eps = torch::randn_like(mean);
-//		auto a = mean + std * eps;
-//		auto action = torch::tanh(a);
-		
-		// log π(a|s)
-//		logp = -0.5 * ((eps.pow(2) + 2 * log_std + std::log(2 * M_PI)).sum(1, true));
-//		logp -= torch::log(1 - action.pow(2) + 1e-6).sum(1, true);
-		
-//		return action;
-//	}
-	
-	torch::Tensor sample_action(torch::Tensor state) {
+	std::tuple<torch::Tensor, torch::Tensor> sample_action(torch::Tensor state) {
 		auto mean_logstd = policy_net->forward(state);
 		auto mean = mean_logstd.slice(1, 0, ACTION_DIM);
-		auto ln_sigma = mean_logstd.slice(1, ACTION_DIM, 2 * ACTION_DIM).clamp(-20, 2);
+		auto ln_sigma = mean_logstd.slice(1, ACTION_DIM, 2 * ACTION_DIM);
 		auto sigma_ = ln_sigma.exp();
 		auto eps = torch::randn_like(mean);
-		auto a = mean + sigma_ * eps;
-		auto action = torch::tanh(a);
+		auto z = mean + sigma_ * eps;
+		auto action = torch::tanh(z);
 		
 		// log π(a|s)
-		ln_pi = -0.5 * ((a - mean)*(a - mean) / (sigma_*sigma_) + 2*ln_sigma + torch::log(torch::tensor(2 * M_PI, torch::TensorOptions().device(device))));
+		const float LOG_2PI = std::log(2 * M_PI);
+		auto ln_pi = -0.5 * ((z - mean)*(z - mean) / (sigma_*sigma_) + 2*ln_sigma + LOG_2PI);
 		ln_pi = ln_pi.sum(1, true);
-		ln_pi = ln_pi - (2 * (torch::log(torch::tensor(2.0)) - a - torch::nn::functional::softplus(-2 * a))).sum(1, true);
+		ln_pi = ln_pi - (2 * (torch::log(torch::tensor(2.0, state.options())) - z - torch::nn::functional::softplus(-2 * z))).sum(1, true);
 		
-		return action;
+		return std::make_tuple(action, ln_pi);
 	}
 };
 
 float get_reward(const std::vector<float>& state, const std::vector<float>& next_state, float not_terminal) {
-	if (next_state[2] > -0.5 && next_state[2] < 0.5) {
-		return 1 - 2*abs(next_state[2]);
+	if (next_state[2] > -0.1 && next_state[2] < 0.1) {
+		return 1;
 	} else {
 		return 0;
 	}
@@ -342,7 +321,7 @@ int main() {
 		
 		while (not_terminal) {
 			mjtNum simstart = d->time;
-			while (d->time - simstart < 1.0/60) {
+			while (d->time - simstart < 1 && not_terminal) {
 			
 			auto action = agent.select_action(state); //std::vector<float>
 			d->ctrl[cart_motor_id] = action[0] * 1000;
@@ -355,7 +334,7 @@ int main() {
 			std::vector<float> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
 			
 			step_count = step_count + 1;
-			if (step_count>2000 || cart_pos>4.5 || cart_pos<-4.5 || pole_pos<-0.5 || pole_pos>0.5) not_terminal = 0;
+			if (step_count>4000 || cart_pos>4.5 || cart_pos<-4.5 || pole_pos<-0.5 || pole_pos>0.5) not_terminal = 0;
 			
 			float reward = get_reward(state, next_state, not_terminal);
 			total_reward = total_reward + reward;
@@ -381,6 +360,12 @@ int main() {
 			// process pending GUI events, call GLFW callbacks
 			glfwPollEvents();
 		} // end episode loop
+		
+		if (episode % TARGET_UPDATE == 0) {
+			agent.update_target_net();
+			std::cout << "update target net" << std::endl;
+		}
+		
 		std::cout << "Episode " << episode << ", total steps = " << step_count << std::endl;
 	} // end training loop
 	
@@ -395,6 +380,3 @@ int main() {
 	mjr_freeContext(&con);
 	return 0;
 }
-
-
-
