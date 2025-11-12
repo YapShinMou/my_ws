@@ -2,37 +2,39 @@
 #include <vector>
 #include <deque>
 #include <random>
-// #include <chrono> ??????????????
 #include <iostream>
 #include <torch/torch.h>
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
-#include <cmath>
+#include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 // MuJoCo data structures
 mjModel* m = nullptr;                  // MuJoCo model
 mjData* d = nullptr;                   // MuJoCo data
-mjvCamera cam;                      // abstract camera
-mjvOption opt;                      // visualization options
-mjvScene scn;                       // abstract scene
-mjrContext con;                     // custom GPU context
-mjvPerturb pert;
+mjvCamera cam;                      // abstract camera +++
+mjvOption opt;                      // visualization options +++
+mjvScene scn;                       // abstract scene +++
+mjrContext con;                     // custom GPU context +++
+mjvPerturb pert; // +++
 
 // ---------------- 超參數 ----------------
 constexpr int STATE_DIM = 4;
 constexpr int ACTION_DIM = 1;
-constexpr int MEMORY_SIZE = 2000;
+constexpr int MEMORY_SIZE = 1000;
 constexpr int BATCH_SIZE = 128;
-constexpr int EPISODES = 1000;
-constexpr int TARGET_UPDATE = 1;
+constexpr int EPISODES = 500;
 
 float GAMMA = 0.99;
 float TAU = 0.005;
-float ALPHA = 0.2;
-float lr_v = 3e-4;
-float lr_q = 3e-4;
-float lr_pi = 3e-4;
-float lr_alpha = 3e-4;
+float lr_q = 1e-4;
+float lr_pi = 1e-7;
+float lr_alpha = 3e-3;
+
+float ALPHA = 0.1;
+
+int ACTION_PARAM = 0;
+int GLFW_SHOW = 0;
 
 // ---------------- 定義 MLP ----------------
 struct MLPImpl : torch::nn::Module {
@@ -87,14 +89,18 @@ private:
 // ---------------- SAC Agent ----------------
 class SACAgent {
 public:
+	const float log_2pi = std::log(2.0 * M_PI);
+	
 	SACAgent() :
 		device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
+		
 		q1_net(STATE_DIM + ACTION_DIM, 256, 1),
 		q2_net(STATE_DIM + ACTION_DIM, 256, 1),
 		q1_target(STATE_DIM + ACTION_DIM, 256, 1),
 		q2_target(STATE_DIM + ACTION_DIM, 256, 1),
 		policy_net(STATE_DIM, 256, 2 * ACTION_DIM),
 		log_alpha(torch::zeros({1}, torch::TensorOptions().requires_grad(true).device(device))),
+		
 		opt_q1(q1_net->parameters(), torch::optim::AdamOptions(lr_q)),
 		opt_q2(q2_net->parameters(), torch::optim::AdamOptions(lr_q)),
 		opt_pi(policy_net->parameters(), torch::optim::AdamOptions(lr_pi)),
@@ -105,19 +111,38 @@ public:
 		q1_target->to(device);
 		q2_target->to(device);
 		policy_net->to(device);
+		
+		torch::NoGradGuard no_grad;
+		auto src1 = q1_net->named_parameters();
+		auto tgt1 = q1_target->named_parameters();
+		for (auto &p : src1) {
+			const auto &name = p.key();
+			tgt1[name].copy_(p.value());
+		}
+		auto src2 = q2_net->named_parameters();
+		auto tgt2 = q2_target->named_parameters();
+		for (auto &p : src2) {
+			const auto &name = p.key();
+			tgt2[name].copy_(p.value());
+		}
+		
+//		torch::load(policy_net, "policy_net.pt");
 	}
 	
-	std::vector<float> select_action(const std::vector<float>& state) {
+	std::vector<float> select_action(std::vector<float>& state) {
 		auto state_tensor = torch::tensor(state).reshape({1, STATE_DIM}).to(device);
 		torch::NoGradGuard no_grad;
-		auto [action_tensor, next_log_pi] = sample_action(state_tensor);
-		auto action_cpu = action_tensor.to(torch::kCPU).squeeze();
-		std::vector<float> action(action_cpu.data_ptr<float>(),
-                                  action_cpu.data_ptr<float>() + action_cpu.numel());
+		auto [action_tensor, _] = sample_action(state_tensor);
+		auto action_cpu = action_tensor.to(torch::kCPU).item<float>(); //squeeze();
+		std::vector<float> action = {action_cpu * 1.0f};
+		
+		if (ACTION_PARAM == 1) {
+			std::cout << "action: " << action << std::endl;
+		}
 		return action;
 	}
 	
-	void update(ReplayBuffer &memory) {
+	void update(ReplayBuffer& memory) {
 		if (memory.size() < BATCH_SIZE) return;
 		
 		auto batch = memory.sample();
@@ -153,7 +178,7 @@ public:
 		auto next_q1 = q1_target->forward(torch::cat({next_state_tensor, next_action}, 1));
 		auto next_q2 = q2_target->forward(torch::cat({next_state_tensor, next_action}, 1));
 		auto q_target_min = torch::min(next_q1, next_q2);
-		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - ALPHA * next_log_pi);
+		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - alpha * next_log_pi); //
 		q_target = q_target.detach();
 		
 		// --- Q updates ---
@@ -161,8 +186,8 @@ public:
 		auto q1 = q1_net->forward(q_input);
 		auto q2 = q2_net->forward(q_input);
 		
-		auto loss_q1 = torch::mse_loss(q1, q_target.detach());
-		auto loss_q2 = torch::mse_loss(q2, q_target.detach());
+		auto loss_q1 = torch::mse_loss(q1, q_target);
+		auto loss_q2 = torch::mse_loss(q2, q_target);
 		
 		opt_q1.zero_grad(); loss_q1.backward(); opt_q1.step();
 		opt_q2.zero_grad(); loss_q2.backward(); opt_q2.step();
@@ -171,7 +196,8 @@ public:
 		auto [a_pi, log_pi] = sample_action(state_tensor);
 		auto q_input_pi = torch::cat({state_tensor, a_pi}, 1);
 		auto q_min_pi = torch::min(q1_net->forward(q_input_pi), q2_net->forward(q_input_pi));
-		auto loss_pi = (ALPHA * log_pi - q_min_pi).mean();
+//		std::cout << "q_min_pi: " << q_min_pi << std::endl;
+		auto loss_pi = (q_min_pi - alpha * log_pi).mean();
 		
 		opt_pi.zero_grad();
 		loss_pi.backward();
@@ -183,27 +209,14 @@ public:
 		opt_log_alpha.zero_grad();
 		alpha_loss.backward();
 		opt_log_alpha.step();
+		
+		// --- Q-target update ---
+		update_target_net();
 	}
 	
 	void save_net() {
 		torch::save(policy_net, "policy_net.pt");
-	}
-	
-	void update_target_net() {
-		torch::NoGradGuard no_grad;
-		for (auto &pair : q1_target->named_parameters()) {
-			auto name = pair.key();                            // 取參數名稱（例如 "layer1.weight"）
-			auto &tgt = pair.value();                          // 取得 target net 的參數 Tensor
-			auto &src = q1_net->named_parameters()[name];      // 對應到 q1_net 的同名參數 Tensor
-			tgt.copy_(tgt * (1.0 - TAU) + src * TAU);          // 按公式更新 target 參數
-		}
-		
-		for (auto &pair : q2_target->named_parameters()) {
-			auto name = pair.key();
-			auto &tgt = pair.value();
-			auto &src = q2_net->named_parameters()[name];
-			tgt.copy_(tgt * (1.0 - TAU) + src * TAU);
-		}
+		std::cout << "Saved Policy_net" << std::endl;
 	}
 	
 private:
@@ -222,31 +235,46 @@ private:
 	torch::optim::Adam opt_pi;
 	torch::optim::Adam opt_log_alpha;
 	
-	std::tuple<torch::Tensor, torch::Tensor> sample_action(torch::Tensor state) {
-		auto mean_logstd = policy_net->forward(state);
-		auto mean = mean_logstd.slice(1, 0, ACTION_DIM);
-		auto ln_sigma = mean_logstd.slice(1, ACTION_DIM, 2 * ACTION_DIM);
+	std::tuple<torch::Tensor, torch::Tensor> sample_action(torch::Tensor& state) {
+		auto mean_lnsigma = policy_net->forward(state);
+		auto mean = mean_lnsigma.slice(1, 0, ACTION_DIM);
+		auto ln_sigma = torch::clamp(mean_lnsigma.slice(1, ACTION_DIM, 2 * ACTION_DIM), -20, 3);
 		auto sigma_ = ln_sigma.exp();
-		auto eps = torch::randn_like(mean);
-		auto z = mean + sigma_ * eps;
-		auto action = torch::tanh(z);
+		auto z = mean + sigma_ * torch::randn_like(mean);
 		
-		// log π(a|s)
-		const float LOG_2PI = std::log(2 * M_PI);
-		auto ln_pi = -0.5 * ((z - mean)*(z - mean) / (sigma_*sigma_) + 2*ln_sigma + LOG_2PI);
-		ln_pi = ln_pi.sum(1, true);
-		ln_pi = ln_pi - (2 * (torch::log(torch::tensor(2.0, state.options())) - z - torch::nn::functional::softplus(-2 * z))).sum(1, true);
+		auto action = torch::tanh(z); //
+		auto log_pi_z = -0.5 * (((z - mean) / sigma_).pow(2) + 2 * ln_sigma + log_2pi); //
+		auto correction_term = torch::log(1.0 - action.pow(2) + 1e-6); // 加上小常數防止 log(0) //
+		auto ln_pi = log_pi_z.sum(1, /*keepdim=*/true) - correction_term.sum(1, /*keepdim=*/true); //
 		
+//		auto ln_pi = ln_z.sum(1, /*keepdim=*/true); // log π(a|s)
+		
+//		action = mean; // test
 		return std::make_tuple(action, ln_pi);
+	}
+	
+	void update_target_net() {
+		torch::NoGradGuard no_grad;
+		for (auto &pair : q1_target->named_parameters()) {
+			auto name = pair.key();                            // 取參數名稱（例如 "layer1.weight"）
+			auto &tgt = pair.value();                          // 取得 target net 的參數 Tensor
+			auto &src = q1_net->named_parameters()[name];      // 對應到 q1_net 的同名參數 Tensor
+			tgt.copy_(src * (1.0 - TAU) + tgt * TAU);          // 按公式更新 target 參數
+		}
+		
+		for (auto &pair : q2_target->named_parameters()) {
+			auto name = pair.key();
+			auto &tgt = pair.value();
+			auto &src = q2_net->named_parameters()[name];
+			tgt.copy_(src * (1.0 - TAU) + tgt * TAU);
+		}
 	}
 };
 
-float get_reward(const std::vector<float>& state, const std::vector<float>& next_state, float not_terminal) {
-	if (next_state[2] > -0.1 && next_state[2] < 0.1) {
-		return 1;
-	} else {
-		return 0;
-	}
+float get_reward(std::vector<float>& state, std::vector<float>& next_state, float not_terminal) {
+	float pole_reward = (1.5 - abs(next_state[2])) / 1.5;
+	float cart_reward = (7.5 - abs(next_state[0] - 3)) / 14;
+	return pole_reward + cart_reward;
 }
 
 // ---------------- Main ----------------
@@ -261,7 +289,7 @@ int main() {
 	}
 	d = mj_makeData(m);
 	
-	// init GLFW, create window, make OpenGL context current
+	// init GLFW, create window, make OpenGL context current // +++
 	if (!glfwInit()) {
 		std::cerr << "Failed to initialize GLFW" << "Failed to initialize GLFW" << std::endl;
 		return 1;
@@ -274,18 +302,18 @@ int main() {
 	glfwMakeContextCurrent(window);
 	glfwSwapInterval(1);
 	
-	// initialize visualization data structures
+	// initialize visualization data structures // +++
 	mjv_defaultCamera(&cam);
 	mjv_defaultPerturb(&pert);
 	mjv_defaultOption(&opt);
 	mjr_defaultContext(&con);
 	mjv_defaultScene(&scn);
 	
-	// create scene and context
+	// create scene and context // +++
 	mjv_makeScene(m, &scn, 1000);
 	mjr_makeContext(m, &con, mjFONTSCALE_150);
 	
-	cam.type = mjCAMERA_FREE; // camera type (mjtCamera)
+	cam.type = mjCAMERA_FREE; // camera type (mjtCamera) // +++
 	cam.lookat[0] = 0.0;
 	cam.lookat[1] = 0.0; // lookat point
 	cam.lookat[2] = 2.0;
@@ -299,12 +327,23 @@ int main() {
 	int pole_pos_id = mj_name2id(m, mjOBJ_SENSOR, "pole_pos");
 	int pole_vel_id = mj_name2id(m, mjOBJ_SENSOR, "pole_vel");
 	
+	mjrRect viewport = {0, 0, 0, 0};
+	glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
+	mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+	mjr_render(viewport, &scn, &con);
+	glfwSwapBuffers(window);
+	glfwPollEvents();
+	
 	// 建立 agent
 	SACAgent agent;
 	ReplayBuffer memory;
 	
 	// 主訓練迴圈
 	for (int episode = 0; episode < EPISODES; ++episode) {
+		YAML::Node SAC_param = YAML::LoadFile("/home/yap/my_ws/src/mujoco_pkg/src/SAC.yaml");
+		ACTION_PARAM = SAC_param["ACTION_PARAM"].as<int>();
+		GLFW_SHOW = SAC_param["GLFW_SHOW"].as<int>();
+		
 		mj_resetData(m, d);
 		mj_forward(m, d);
 		
@@ -320,11 +359,13 @@ int main() {
 		d->ctrl[cart_motor_id] = 0;
 		
 		while (not_terminal) {
-			mjtNum simstart = d->time;
-			while (d->time - simstart < 1 && not_terminal) {
+			mjtNum simstart = d->time; // +++
+			while (d->time - simstart < 1.0/20.0 && not_terminal) { // +++
 			
 			auto action = agent.select_action(state); //std::vector<float>
-			d->ctrl[cart_motor_id] = action[0] * 1000;
+//			std::cout << "action: " << action << std::endl;
+			float action_scalar = std::min(1000, 200 + 800 * (episode / (EPISODES - 200))); //200 -> 1000
+			d->ctrl[cart_motor_id] = action[0] * action_scalar;
 			
 			mj_step(m, d); // 執行一個模擬步
 			cart_pos = d->sensordata[m->sensor_adr[cart_pos_id]];
@@ -334,7 +375,9 @@ int main() {
 			std::vector<float> next_state = {cart_pos, cart_vel, pole_pos, pole_vel};
 			
 			step_count = step_count + 1;
-			if (step_count>4000 || cart_pos>4.5 || cart_pos<-4.5 || pole_pos<-0.5 || pole_pos>0.5) not_terminal = 0;
+			if (step_count>4000 || cart_pos>4.5 || cart_pos<-4.5 || pole_pos<-1.5 || pole_pos>1.5) {
+				not_terminal = 0;
+			}
 			
 			float reward = get_reward(state, next_state, not_terminal);
 			total_reward = total_reward + reward;
@@ -346,37 +389,36 @@ int main() {
 			state = next_state;
 			} // dt < 1/60
 			
-			// get framebuffer viewport
-			mjrRect viewport = {0, 0, 0, 0};
-			glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
-			
-			// update scene and render
-			mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
-			mjr_render(viewport, &scn, &con);
-			
-			// swap OpenGL buffers (blocking call due to v-sync)
-			glfwSwapBuffers(window);
-			
-			// process pending GUI events, call GLFW callbacks
-			glfwPollEvents();
+			if (GLFW_SHOW == 1) {
+				// get framebuffer viewport // +++
+				mjrRect viewport = {0, 0, 0, 0};
+				glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
+				
+				// update scene and render // +++
+				mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);
+				mjr_render(viewport, &scn, &con);
+				
+				// swap OpenGL buffers (blocking call due to v-sync) // +++
+				glfwSwapBuffers(window);
+				
+				// process pending GUI events, call GLFW callbacks // +++
+				glfwPollEvents();
+			}
 		} // end episode loop
 		
-		if (episode % TARGET_UPDATE == 0) {
-			agent.update_target_net();
-			std::cout << "update target net" << std::endl;
-		}
-		
-		std::cout << "Episode " << episode << ", total steps = " << step_count << std::endl;
+		std::cout << "Episode " << episode << ", Steps = " << step_count << ", Reward = " << total_reward << std::endl;
+		agent.save_net();
 	} // end training loop
-	
-	agent.save_net();
 	
 	mj_deleteData(d);
 	mj_deleteModel(m);
 	
-	// close GLFW, free visualization storage
+	// close GLFW, free visualization storage // +++
 	glfwTerminate();
 	mjv_freeScene(&scn);
 	mjr_freeContext(&con);
 	return 0;
 }
+
+
+
