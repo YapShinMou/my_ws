@@ -3,6 +3,7 @@ project(mujoco_pkg)
 
 set(Torch_DIR /home/yap/libtorch/share/cmake/Torch) #自己新增###############################
 find_package(Torch REQUIRED) #自己新增###############################
+find_package(yaml-cpp REQUIRED) #自己新增###############################
 
 include_directories(/usr/local/include/mujoco)
 link_directories(/usr/local/lib/mujoco)
@@ -19,6 +20,8 @@ add_executable(test src/test.cpp)
 add_executable(NN src/NN.cpp)
 add_executable(NN_batch src/NN_batch.cpp)
 add_executable(DQN_test src/DQN_test.cpp)
+add_executable(CartPole_SAC src/CartPole_SAC.cpp)
+add_executable(SAC_test src/SAC_test.cpp)
 
 target_link_libraries(CartPole mujoco glfw pthread)
 target_link_libraries(CartPole_without_GUI mujoco glfw GL m dl pthread)
@@ -30,4 +33,5 @@ target_link_libraries(test mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(NN mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(NN_batch mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
 target_link_libraries(DQN_test mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})
-
+target_link_libraries(CartPole_SAC mujoco glfw GL m dl pthread yaml-cpp ${TORCH_LIBRARIES})
+target_link_libraries(SAC_test mujoco glfw GL m dl pthread ${TORCH_LIBRARIES})

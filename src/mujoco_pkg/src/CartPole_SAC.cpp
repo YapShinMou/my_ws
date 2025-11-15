@@ -22,32 +22,36 @@ mjvPerturb pert; // +++
 constexpr int STATE_DIM = 4;
 constexpr int ACTION_DIM = 1;
 constexpr int MEMORY_SIZE = 1000;
-constexpr int BATCH_SIZE = 128;
-constexpr int EPISODES = 500;
+constexpr int BATCH_SIZE = 256;
+constexpr int EPISODES = 1000;
 
 float GAMMA = 0.99;
 float TAU = 0.005;
 float lr_q = 1e-4;
-float lr_pi = 1e-7;
-float lr_alpha = 3e-3;
+float lr_pi = 1e-6;
+float lr_alpha = 3e-4;
 
-float ALPHA = 0.1;
+float ALPHA = 0.001;
 
 int ACTION_PARAM = 0;
 int GLFW_SHOW = 0;
+int SAVE_NET = 0;
+int LOSS_POLICY = 0;
+int LOSS_Q = 0;
+int Q_MIN = 0;
 
 // ---------------- 定義 MLP ----------------
 struct MLPImpl : torch::nn::Module {
-    torch::nn::Linear l1{nullptr}, l2{nullptr}, l3{nullptr};
+    torch::nn::Linear layer1{nullptr}, layer2{nullptr}, layer3{nullptr};
     MLPImpl(int in_dim, int hidden, int out_dim) {
-        l1 = register_module("l1", torch::nn::Linear(in_dim, hidden));
-        l2 = register_module("l2", torch::nn::Linear(hidden, hidden));
-        l3 = register_module("l3", torch::nn::Linear(hidden, out_dim));
+        layer1 = register_module("layer1", torch::nn::Linear(in_dim, hidden));
+        layer2 = register_module("layer2", torch::nn::Linear(hidden, hidden));
+        layer3 = register_module("layer3", torch::nn::Linear(hidden, out_dim));
     }
     torch::Tensor forward(torch::Tensor x) {
-        x = torch::relu(l1->forward(x));
-        x = torch::relu(l2->forward(x));
-        return l3->forward(x);
+        x = torch::relu(layer1->forward(x));
+        x = torch::relu(layer2->forward(x));
+        return layer3->forward(x);
     }
 };
 TORCH_MODULE(MLP);
@@ -178,7 +182,7 @@ public:
 		auto next_q1 = q1_target->forward(torch::cat({next_state_tensor, next_action}, 1));
 		auto next_q2 = q2_target->forward(torch::cat({next_state_tensor, next_action}, 1));
 		auto q_target_min = torch::min(next_q1, next_q2);
-		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - alpha * next_log_pi); //
+		auto q_target = reward_tensor + GAMMA * not_t_tensor * (q_target_min - ALPHA * next_log_pi); //
 		q_target = q_target.detach();
 		
 		// --- Q updates ---
@@ -189,18 +193,35 @@ public:
 		auto loss_q1 = torch::mse_loss(q1, q_target);
 		auto loss_q2 = torch::mse_loss(q2, q_target);
 		
-		opt_q1.zero_grad(); loss_q1.backward(); opt_q1.step();
-		opt_q2.zero_grad(); loss_q2.backward(); opt_q2.step();
+		if (LOSS_Q == 1) {
+			std::cout << "loss_q1: " << loss_q1 << ", loss_q2: " << loss_q2 << std::endl;
+		}
+		
+		opt_q1.zero_grad();
+		opt_q2.zero_grad();
+		loss_q1.backward();
+		loss_q2.backward();
+		torch::nn::utils::clip_grad_norm_(q1_net->parameters(), 1.0);
+		torch::nn::utils::clip_grad_norm_(q2_net->parameters(), 1.0);
+		opt_q1.step();
+		opt_q2.step();
 		
 		// --- Policy update ---
 		auto [a_pi, log_pi] = sample_action(state_tensor);
 		auto q_input_pi = torch::cat({state_tensor, a_pi}, 1);
 		auto q_min_pi = torch::min(q1_net->forward(q_input_pi), q2_net->forward(q_input_pi));
-//		std::cout << "q_min_pi: " << q_min_pi << std::endl;
-		auto loss_pi = (q_min_pi - alpha * log_pi).mean();
+		if (Q_MIN == 1) {
+			std::cout << "q_min_pi: " << q_min_pi << std::endl;
+		}
+		auto loss_pi = (q_min_pi - ALPHA * log_pi).mean();
+		
+		if (LOSS_POLICY == 1) {
+			std::cout << "loss_pi: " << loss_pi << std::endl;
+		}
 		
 		opt_pi.zero_grad();
 		loss_pi.backward();
+		torch::nn::utils::clip_grad_norm_(policy_net->parameters(), 1.0);
 		opt_pi.step();
 		
 		// --- alpha ---
@@ -273,7 +294,10 @@ private:
 
 float get_reward(std::vector<float>& state, std::vector<float>& next_state, float not_terminal) {
 	float pole_reward = (1.5 - abs(next_state[2])) / 1.5;
-	float cart_reward = (7.5 - abs(next_state[0] - 3)) / 14;
+	float cart_reward = 0;
+	if (abs(next_state[2]) < 0.2) {
+		cart_reward = (7.5 - abs(next_state[0] - 3)) / 7;
+	}
 	return pole_reward + cart_reward;
 }
 
@@ -343,6 +367,10 @@ int main() {
 		YAML::Node SAC_param = YAML::LoadFile("/home/yap/my_ws/src/mujoco_pkg/src/SAC.yaml");
 		ACTION_PARAM = SAC_param["ACTION_PARAM"].as<int>();
 		GLFW_SHOW = SAC_param["GLFW_SHOW"].as<int>();
+		SAVE_NET = SAC_param["SAVE_NET"].as<int>();
+		LOSS_POLICY = SAC_param["LOSS_POLICY"].as<int>();
+		LOSS_Q = SAC_param["LOSS_Q"].as<int>();
+		Q_MIN = SAC_param["Q_MIN"].as<int>();
 		
 		mj_resetData(m, d);
 		mj_forward(m, d);
@@ -364,7 +392,7 @@ int main() {
 			
 			auto action = agent.select_action(state); //std::vector<float>
 //			std::cout << "action: " << action << std::endl;
-			float action_scalar = std::min(1000, 200 + 800 * (episode / (EPISODES - 200))); //200 -> 1000
+			float action_scalar = std::min(1000, 400 + 600 * (episode / (EPISODES - 200))); //200 -> 1000
 			d->ctrl[cart_motor_id] = action[0] * action_scalar;
 			
 			mj_step(m, d); // 執行一個模擬步
@@ -407,7 +435,10 @@ int main() {
 		} // end episode loop
 		
 		std::cout << "Episode " << episode << ", Steps = " << step_count << ", Reward = " << total_reward << std::endl;
-		agent.save_net();
+		
+		if (SAVE_NET == 1) {
+			agent.save_net();
+		}
 	} // end training loop
 	
 	mj_deleteData(d);
@@ -419,6 +450,5 @@ int main() {
 	mjr_freeContext(&con);
 	return 0;
 }
-
 
 

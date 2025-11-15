@@ -12,9 +12,9 @@ float LR = 5e-2; // 神經網路學習率
 struct NetImpl : torch::nn::Module {
 	torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
 	NetImpl() {
-		fc1 = register_module("fc1", torch::nn::Linear(NN_input_dim, 128));
-		fc2 = register_module("fc2", torch::nn::Linear(128, 64));
-		fc3 = register_module("fc3", torch::nn::Linear(64, NN_output_dim));
+		fc1 = register_module("fc1", torch::nn::Linear(NN_input_dim, 8));
+		fc2 = register_module("fc2", torch::nn::Linear(8, 4));
+		fc3 = register_module("fc3", torch::nn::Linear(4, NN_output_dim));
 	}
 	torch::Tensor forward(torch::Tensor x) {
 		x = torch::leaky_relu(fc1->forward(x));
@@ -39,6 +39,7 @@ void train(Net& neural_network,
 	// ------ Backpropagate ------
 	auto output = neural_network->forward(sample_tensor); // Forward
 	auto loss = loss_(output, target_tensor); // 計算 Loss
+	std::cout << "loss: " << loss << std::endl;
 	optimizer.zero_grad(); // 清空上一輪梯度
 	loss.backward();       // 反向傳播
 	optimizer.step();      // 更新權重

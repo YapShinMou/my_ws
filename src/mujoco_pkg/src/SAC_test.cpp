@@ -102,6 +102,8 @@ public:
 		q1_target->to(device);
 		q2_target->to(device);
 		policy_net->to(device);
+		
+		torch::load(policy_net, "policy_net.pt");
 	}
 	
 	std::vector<float> select_action(const std::vector<float>& state) {
@@ -234,6 +236,15 @@ public:
 		torch::save(policy_net, "policy_net.pt");
 	}
 	
+	void show_net() {
+		std::cout << policy_net->layer1->weight << std::endl;
+		std::cout << policy_net->layer1->bias << std::endl;
+		std::cout << policy_net->layer2->weight << std::endl;
+		std::cout << policy_net->layer2->bias << std::endl;
+		std::cout << policy_net->layer3->weight << std::endl;
+		std::cout << policy_net->layer3->bias << std::endl;
+	}
+	
 private:
 	torch::Device device;
 	
@@ -291,6 +302,8 @@ float get_reward(const std::vector<float>& state,
 int main() {
 	SACAgent agent;
 	ReplayBuffer memory;
+	
+	agent.show_net();
 	
 	for (int episode = 0; episode < EPISODES; ++episode) {
 		float total_reward = 0;
