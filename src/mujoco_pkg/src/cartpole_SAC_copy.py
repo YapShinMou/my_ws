@@ -1,4 +1,4 @@
-# 照抄自https://hrl.boyuai.com/chapter/2/sac%E7%AE%97%E6%B3%95/
+#照操自https://hrl.boyuai.com/chapter/2/sac算法/
 import numpy as np
 import collections
 import random
@@ -18,12 +18,12 @@ d = mujoco.MjData(m)
 # --- 超參數 ---
 STATE_DIM = 4
 ACTION_DIM = 1
-MEMORY_SIZE = 10000
-BATCH_SIZE = 256
+MEMORY_SIZE = 100000
+BATCH_SIZE = 512
 EPISODES = 1000
 
 GAMMA = 0.99
-TAU = 0.005
+TAU = 0.001
 LR_CRITIC = 3e-5
 LR_ACTOR = 3e-7
 LR_ALPHA = 3e-6
@@ -33,11 +33,14 @@ class PolicyNetContinuous(torch.nn.Module):
    def __init__(self, state_dim, hidden_dim, action_dim):
       super().__init__()
       self.fc1 = torch.nn.Linear(state_dim, hidden_dim)
+      self.bn1 = nn.BatchNorm1d(hidden_dim)
       self.fc_mu = torch.nn.Linear(hidden_dim, action_dim)
       self.fc_std = torch.nn.Linear(hidden_dim, action_dim)
 
    def forward(self, x):
-      x = F.relu(self.fc1(x))
+      x = self.fc1(x)
+      #x = self.bn1(x)
+      x = F.relu(x)
       mu = self.fc_mu(x)
       std = F.softplus(self.fc_std(x))
       dist = Normal(mu, std)
@@ -52,13 +55,19 @@ class QValueNetContinuous(torch.nn.Module):
    def __init__(self, state_dim, hidden_dim, action_dim):
       super().__init__()
       self.fc1 = torch.nn.Linear(state_dim + action_dim, hidden_dim)
+      self.bn1 = nn.BatchNorm1d(hidden_dim)
       self.fc2 = torch.nn.Linear(hidden_dim, hidden_dim)
+      self.bn2 = nn.BatchNorm1d(hidden_dim)
       self.fc_out = torch.nn.Linear(hidden_dim, 1)
 
    def forward(self, x, a):
       cat = torch.cat([x, a], dim=1)
-      x = F.relu(self.fc1(cat))
-      x = F.relu(self.fc2(x))
+      x = self.fc1(cat)
+      #x = self.bn1(x)
+      x = F.relu(x)
+      x = self.fc2(x)
+      #x = self.bn2(x)
+      x = F.relu(x)
       return self.fc_out(x)
 
 # --- ReplayBuffer ---
@@ -89,11 +98,11 @@ class deep_learning:
       self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
       print(f"Using {self.device} device")
 
-      self.actor = PolicyNetContinuous(STATE_DIM, 256, ACTION_DIM).to(self.device)  # 策略网络
-      self.critic_1 = QValueNetContinuous(STATE_DIM, 256, ACTION_DIM).to(self.device)  # 第一个Q网络
-      self.critic_2 = QValueNetContinuous(STATE_DIM, 256, ACTION_DIM).to(self.device)  # 第二个Q网络
-      self.target_critic_1 = QValueNetContinuous(STATE_DIM, 256, ACTION_DIM).to(self.device)  # 第一个目标Q网络
-      self.target_critic_2 = QValueNetContinuous(STATE_DIM, 256, ACTION_DIM).to(self.device)  # 第二个目标Q网络
+      self.actor = PolicyNetContinuous(STATE_DIM, 512, ACTION_DIM).to(self.device)  # 策略网络
+      self.critic_1 = QValueNetContinuous(STATE_DIM, 512, ACTION_DIM).to(self.device)  # 第一个Q网络
+      self.critic_2 = QValueNetContinuous(STATE_DIM, 512, ACTION_DIM).to(self.device)  # 第二个Q网络
+      self.target_critic_1 = QValueNetContinuous(STATE_DIM, 512, ACTION_DIM).to(self.device)  # 第一个目标Q网络
+      self.target_critic_2 = QValueNetContinuous(STATE_DIM, 512, ACTION_DIM).to(self.device)  # 第二个目标Q网络
 
       with torch.no_grad():
          self.target_critic_1.load_state_dict(self.critic_1.state_dict())
@@ -110,10 +119,13 @@ class deep_learning:
       self.loss_fn = nn.MSELoss()
 
    def select_action(self, state):
+      # self.actor.eval()
       with torch.no_grad():
          state_tensor = torch.from_numpy(state).float().to(self.device)
+         #state_tensor = state_tensor.unsqueeze(0)
          action_tensor, log_prob = self.actor.forward(state_tensor)
          # action_tensor = action_tensor.view(-1)
+         #action_tensor = action_tensor.squeeze(0)
          action = action_tensor.cpu()
          action = action.numpy()
          return action
@@ -135,6 +147,10 @@ class deep_learning:
    def update(self, experience_repository):
       if experience_repository.size() < BATCH_SIZE:
          return 0
+
+      # self.critic_1.train()
+      # self.critic_2.train()
+      # self.actor.train()
 
       batch = experience_repository.sample()
       state, action, reward, next_state, done = zip(*batch)
@@ -174,6 +190,11 @@ class deep_learning:
 
       self.soft_update(self.critic_1, self.target_critic_1)
       self.soft_update(self.critic_2, self.target_critic_2)
+
+   def save_model(self):
+      torch.save(self.actor, "actor.pt")
+      torch.save(self.critic_1, "critic_1.pt")
+      torch.save(self.critic_2, "critic_2.pt")
 
 # --- get_reward() ---
 def get_reward(state, next_state, done):
@@ -277,5 +298,6 @@ def main():
          state = next_state
 
       print(f"Episode {episode}, Steps: {step_count}, Reward: {total_reward}")
+   DL.save_model()
 
 main()
