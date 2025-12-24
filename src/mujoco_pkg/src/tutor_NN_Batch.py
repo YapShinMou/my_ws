@@ -1,17 +1,19 @@
+# 2025/12/24 範例
 import numpy as np
 import collections
 import random
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 INPUT_DIM = 4
 OUTPUT_DIM = 2
-MEMORY_SIZE = 20
-BATCH_SIZE = 6
-LR = 0.001
+MEMORY_SIZE = 100
+BATCH_SIZE = 64
+LR = 0.0001
 
-class SimpleNeuralNetwork(nn.Module):
+class NeuralNetwork(nn.Module):
    def __init__(self, input_dim, hidden_dim, output_dim):
       super().__init__()
       self.layer1 = nn.Linear(input_dim, hidden_dim)
@@ -19,70 +21,77 @@ class SimpleNeuralNetwork(nn.Module):
       self.layer3 = nn.Linear(hidden_dim, output_dim)
 
    def forward(self, x):
-      x = F.relu(self.layer1(x))
-      x = F.relu(self.layer2(x))
-      output = self.layer3(x)
-      return output
+      x = self.layer1(x)
+      x = F.relu(x)
+      x = self.layer2(x)
+      x = F.relu(x)
+      return self.layer3(x)
+
 
 class ReplayBuffer:
-   def __init__(self):
-      self.buffer_ = collections.deque()
+   def __init__(self, input_dim, target_dim, memory_size, batch_size,):
+      self.input_buffer = np.zeros((memory_size, input_dim), dtype=np.float32)
+      self.target_buffer = np.zeros((memory_size, target_dim), dtype=np.float32)
+      self.memory_size = memory_size
+      self.batch_size = batch_size
+      self.pointer = 0
+      self.size = 0
 
-   def push(self, input, target):
-      # print(f"push input: \n{input}")
-      experience = (input, target)
-      if len(self.buffer_) >= MEMORY_SIZE:
-         self.buffer_.pop()
-      self.buffer_.appendleft(experience)
+   def push(self, input, target): # input np([  ])
+      self.input_buffer[self.pointer] = input
+      self.target_buffer[self.pointer] = target
+      self.pointer = (self.pointer + 1) % self.memory_size
+      if self.size < self.memory_size:
+         self.size = self.size + 1
 
    def sample(self):
-      batch = random.sample(self.buffer_, BATCH_SIZE)
-      # print(f"sample batch: {batch}")
-      return batch
+      indices = np.random.randint(0, self.memory_size, size=self.batch_size)
+      input_batch = self.input_buffer[indices]
+      target_batch = self.target_buffer[indices]
+      return input_batch, target_batch
 
-   def size(self):
-      return len(self.buffer_)
 
 class deep_learning:
-   def __init__(self):
+   def __init__(self, input_dim, hidden_dim, output_dim):
       self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
       print(f"Using {self.device} device")
-      self.net_1 = SimpleNeuralNetwork(INPUT_DIM, 64, OUTPUT_DIM).to(self.device)
+      self.net_1 = NeuralNetwork(input_dim, hidden_dim, output_dim).to(self.device)
       self.optimizer_1 = torch.optim.Adam(self.net_1.parameters())
       self.loss_fn = nn.MSELoss()
 
-   def net_forward(self, input):
+   def predict(self, input):
       with torch.no_grad():
-         input_tensor = torch.from_numpy(input).float().to(self.device)
+         input_tensor = torch.tensor(input, dtype=torch.float32).to(self.device)
          output = self.net_1.forward(input_tensor)
-         return output
+      return output.squeeze().cpu().numpy()
 
-   def train(self, experience_repository):
-      if experience_repository.size() < BATCH_SIZE:
-         return 0
+   def train(self, buffer):
+      input_batch, target_batch = buffer.sample()
+      input_torch = torch.tensor(input_batch, dtype=torch.float32).to(self.device)
+      target_torch = torch.tensor(target_batch, dtype=torch.float32).to(self.device)
 
-      batch = experience_repository.sample()
-      inputs, targets = zip(*batch)
-      # print(f"inputs: {inputs}")
-      # print(f"np.array: {np.array(inputs)}")
-      input_batch = torch.from_numpy(np.array(inputs)).float().to(self.device)
-      print(f"input_batch: \n{input_batch}")
-      target_batch = torch.from_numpy(np.array(targets)).float().to(self.device)
-      print(f"target_batch: \n{target_batch}")
-      output_batch = self.net_1.forward(input_batch)
-      # print(output_batch)
-
-      print(input_batch.shape[0])
+      output_torch = self.net_1.forward(input_torch)
 
       self.optimizer_1.zero_grad()
-      loss = self.loss_fn(output_batch, target_batch)
+      loss = self.loss_fn(output_torch, target_torch)
       loss.backward()
       self.optimizer_1.step()
-      self.net_1.eval()
+
+   def save_model(self):
+      torch.save(self.net_1, "net_1.pt")
+      print(f"save model")
+
+   def load_model(self):
+      self.net_1 = torch.load("net_1.pt", weights_only=False)
+      self.net_1.to(self.device)
+      self.optimizer_1 = torch.optim.Adam(self.net_1.parameters())
+      self.net_1.train()
+      print(f"load model")
+
 
 def main():
-   DL = deep_learning()
-   memory = ReplayBuffer()
+   DL = deep_learning(INPUT_DIM, 32, OUTPUT_DIM)
+   memory = ReplayBuffer(INPUT_DIM, OUTPUT_DIM, MEMORY_SIZE, BATCH_SIZE)
 
    a_input = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
    a_target = np.array([3.0, 7.0], dtype=np.float32)
@@ -90,22 +99,35 @@ def main():
    b_target = np.array([4.0, 8.0], dtype=np.float32)
    c_input = np.array([3, 5, 7, 9], dtype=np.float32)
    c_target = np.array([8, 16], dtype=np.float32)
+   print(f"target: {a_target} {b_target} {c_target}")
 
-   # print(a_input)
-   output = DL.net_forward(a_input)
-   print(f"untrain output: {output}")
+   output_a = DL.predict(a_input)
+   output_b = DL.predict(b_input)
+   output_c = DL.predict(c_input)
+   print(f"untrain output: {output_a} {output_b} {output_c}")
 
-   for i in range(10):
-      # print(f"a_input: \n{a_input}")
-      memory.push(a_input, a_target)
-      memory.push(b_input, b_target)
-      memory.push(c_input, c_target)
+   DL.load_model()
 
-   for i in range(1):
+   for i in range(150):
+      intput_1 = np.random.random()*20 - 10
+      intput_2 = np.random.random()*20 - 10
+      intput_3 = np.random.random()*20 - 10
+      intput_4 = np.random.random()*20 - 10
+      input = np.array([intput_1, intput_2, intput_3, intput_4], dtype=np.float32)
+      target = np.array([intput_1+intput_2+np.random.normal(), intput_3+intput_4+np.random.normal()], dtype=np.float32)
+      memory.push(input, target)
+
+   for i in range(1000):
       DL.train(memory)
 
-   output = DL.net_forward(a_input)
-   print(f"trained output: {output}")
+   output_a = DL.predict(a_input)
+   output_b = DL.predict(b_input)
+   output_c = DL.predict(c_input)
+   print(f"trained output: {output_a} {output_b} {output_c}")
+
+   DL.save_model()
 
 
+start_time = time.time()
 main()
+print(f"run time: {time.time() - start_time}")
