@@ -63,6 +63,7 @@ class ReplayBuffer:
       self.target_buffer = np.concatenate((buffer['b'], self.target_buffer))
       if self.input_buffer.shape[0] < self.memory_size:
          self.pointer = self.input_buffer.shape[0]
+         self.size = self.pointer
          self.input_buffer = np.concatenate((self.input_buffer, np.zeros((self.memory_size - self.input_buffer.shape[0], self.input_dim), dtype=np.float32)))
          self.target_buffer = np.concatenate((self.target_buffer, np.zeros((self.memory_size - self.target_buffer.shape[0], self.target_dim), dtype=np.float32)))
          self.size = self.input_buffer.shape[0]
@@ -73,8 +74,6 @@ class ReplayBuffer:
          self.pointer = 0
          self.size = self.memory_size
          print(f"load buffer, buffer overflow")
-
-      # 減0 載buffer, 合併buffer, 訓練, memory_size, [self.input_buffer.shape[0] - self.memory_size:self.input_buffer.shape[0], :]
 
 
 class deep_learning:
@@ -151,7 +150,7 @@ def main():
       target = np.array([intput_1+intput_2+np.random.normal(), intput_3+intput_4+np.random.normal()], dtype=np.float32)
       memory.push(input, target)
 
-   for i in range(1000):
+   for i in range(5000):
       DL.train(memory)
 
    output_a = DL.predict(a_input)
