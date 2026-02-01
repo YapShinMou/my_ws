@@ -102,8 +102,8 @@ class deep_learning:
       output_torch = self.net_1.forward(input_torch)
 
       self.optimizer_1.zero_grad()
-      loss = self.loss_fn(output_torch, target_torch)
-      loss.backward()
+      self.loss = self.loss_fn(output_torch, target_torch)
+      self.loss.backward()
       self.optimizer_1.step()
 
    def save_model(self, file_name):
