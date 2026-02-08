@@ -6,31 +6,21 @@ for、if、while內宣告的變數和物件只能在該迴圈使用
 
 c語言，全域(函式外)不能呼叫函式，不能執行for、if、while
 
+```python
 import torch #匯入函式庫
-
 class abc(): #定義類別
-
 	def __init__(self): #建構函式/初始化方法 (Constructor/Initialization Method)
-	
 		#super().__init__() #執行繼承之類別的初始
-		
 		self.a = 0 #屬性
-		
 	def b(self): #方法
-	
 		print(f"Hello World")
-		
 def main():
-
 	aaa = abc() #建立物件
-	
 	aaa.a = 0 #物件的屬性
-	
 	aaa.b #呼叫方法
-	
 if __name__ == "__main__"
-
 	main()
+```
 
 
 # 專案名稱 (Project Title) README範例
