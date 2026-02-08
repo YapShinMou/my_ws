@@ -1,16 +1,25 @@
 **自製函式庫、建構子(constructor)範例**
 
-函式內宣告的變數只能在該函式使用
+函式內宣告的變數和物件只能在該函式使用
 
-函式內宣告的物件只能在該函式使用
+for、if、while內宣告的變數和物件只能在該迴圈使用
 
-for、if、while內宣告的變數只能在該迴圈使用
+c語言，全域(函式外)不能呼叫函式，不能執行for、if、while
 
-for、if、while內宣告的物件只能在該迴圈使用
+import torch #匯入函式庫
+class abc(): #定義類別
+	def __init__(self): #建構函式/初始化方法 (Constructor/Initialization Method)
+		#super().__init__() #執行繼承之類別的初始
+		self.a = 0 #屬性
+	def b(self): #方法
+		print(f"Hello World")
+def main():
+	aaa = abc() #建立物件
+	aaa.a = 0 #物件的屬性
+	aaa.b #呼叫方法
+if __name__ == "__main__"
+	main()
 
-全域(函式外)不能呼叫函式，不能執行for、if、while
-
-class裡面的任一函式可以呼叫任一class裡面宣告的變數和函式
 
 # 專案名稱 (Project Title) README範例
 簡短描述你的專案是做什麼的（1～3 行）。
